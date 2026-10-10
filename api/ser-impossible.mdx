@@ -1,0 +1,148 @@
+---
+title: "Impossible: Uninstantiable Serializer Helper Type"
+sidebarTitle: "Impossible"
+description: "Impossible<Ok, Error> is a helper type for Serializer implementations that do not support certain compound types, satisfying trait bounds without being constructible."
+---
+
+Not every data format needs to support every compound type in the Serde data model. A serializer that only handles scalar values — for example one backed by `fmt::Formatter` — has no meaningful implementation for `serialize_seq` or `serialize_map`. Serde provides `Impossible<Ok, Error>` precisely for this situation: it is a type that satisfies all seven compound serializer trait bounds but can never actually be constructed, making it safe to use as the associated type for compound operations your serializer does not support.
+
+## Type definition
+
+`Impossible` is defined in `serde::ser::impossible` and re-exported at `serde::ser::Impossible`:
+
+```rust
+pub struct Impossible<Ok, Error> {
+    void: Void,
+    ok: PhantomData<Ok>,
+    error: PhantomData<Error>,
+}
+
+enum Void {}
+```
+
+The private `void: Void` field is of type `Void`, an uninhabited enum with no variants. Because `Void` has no values, `Impossible` has no values either — there is no safe code path that produces an instance of it. The `PhantomData` fields carry the `Ok` and `Error` type parameters for variance and drop-check purposes without occupying any memory.
+
+<Note>
+`Impossible` is a zero-cost abstraction: because it can never be instantiated, none of the trait method bodies it provides will ever be called. The `match self.void {}` exhaustiveness check in each method body is the Rust idiom for unreachable code in an uninhabited context.
+</Note>
+
+## Implemented traits
+
+`Impossible<Ok, Error>` implements all seven compound serializer traits whenever `Error: ser::Error`:
+
+| Trait | Methods provided |
+|---|---|
+| [`SerializeSeq`](/api/ser-compound#serializeseq) | `serialize_element`, `end` |
+| [`SerializeTuple`](/api/ser-compound#serializetuple) | `serialize_element`, `end` |
+| [`SerializeTupleStruct`](/api/ser-compound#serializetuplestruct) | `serialize_field`, `end` |
+| [`SerializeTupleVariant`](/api/ser-compound#serializetuplevariant) | `serialize_field`, `end` |
+| [`SerializeMap`](/api/ser-compound#serializemap) | `serialize_key`, `serialize_value`, `end` |
+| [`SerializeStruct`](/api/ser-compound#serializestruct) | `serialize_field`, `end` |
+| [`SerializeStructVariant`](/api/ser-compound#serializestructvariant) | `serialize_field`, `end` |
+
+Each method body is:
+
+```rust
+fn serialize_element<T>(&mut self, value: &T) -> Result<(), Error>
+where
+    T: ?Sized + Serialize,
+{
+    let _ = value;
+    match self.void {}
+}
+```
+
+The `match self.void {}` is exhaustive because `Void` has no variants: the compiler knows this branch is unreachable and accepts it without a fallback arm.
+
+## Use case: unsupported compound types
+
+Set `type SerializeSeq = Impossible<Self::Ok, Self::Error>` (and the other associated types) on your `Serializer` impl for every compound kind you do not support. Then, in the corresponding `serialize_seq` method, return an error immediately. Because `Impossible` can never be constructed, the `SerializeSeq` bound is satisfied even though the method can never produce a value of that type.
+
+```rust
+use serde::ser::{Serializer, Impossible};
+
+impl Serializer for MySerializer {
+    type Ok = ();
+    type Error = MyError;
+
+    type SerializeSeq = Impossible<(), MyError>;
+    // … other associated types …
+
+    /// This data format does not support serializing sequences.
+    fn serialize_seq(
+        self,
+        len: Option<usize>,
+    ) -> Result<Self::SerializeSeq, MyError> {
+        // Impossible cannot be instantiated, so the only thing
+        // we can do here is return an error.
+        Err(ser::Error::custom("sequences are not supported"))
+    }
+
+    // … other Serializer methods …
+}
+```
+
+<Tip>
+You only need to use `Impossible` for the compound types your serializer genuinely does not support. Types that are supported should use a concrete state-machine type as the associated type instead.
+</Tip>
+
+## Real-world example: `fmt::Formatter` serializer
+
+The `fmt.rs` source file in `serde_core` implements `Serializer` for `&mut fmt::Formatter<'_>`. This serializer exists so that `#[derive(Serialize)]` enum types can cheaply implement `Display` by delegating to `serialize`. Because `fmt::Formatter` can only write text, it uses `Impossible` for every compound associated type:
+
+```rust
+impl<'a> Serializer for &mut fmt::Formatter<'a> {
+    type Ok = ();
+    type Error = fmt::Error;
+
+    type SerializeSeq           = Impossible<(), fmt::Error>;
+    type SerializeTuple         = Impossible<(), fmt::Error>;
+    type SerializeTupleStruct   = Impossible<(), fmt::Error>;
+    type SerializeTupleVariant  = Impossible<(), fmt::Error>;
+    type SerializeMap           = Impossible<(), fmt::Error>;
+    type SerializeStruct        = Impossible<(), fmt::Error>;
+    type SerializeStructVariant = Impossible<(), fmt::Error>;
+
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, fmt::Error> {
+        Err(fmt::Error)
+    }
+
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, fmt::Error> {
+        Err(fmt::Error)
+    }
+
+    // … all other compound methods return Err(fmt::Error) …
+}
+```
+
+This allows the `fmt::Formatter` serializer to implement the complete `Serializer` trait while only meaningfully supporting scalar values and unit variants. The doctest in the source shows the intended use case:
+
+```rust
+use serde::ser::Serialize;
+use serde_derive::Serialize;
+use std::fmt::{self, Display};
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MessageType {
+    StartRequest,
+    EndRequest,
+}
+
+impl Display for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.serialize(f)
+    }
+}
+```
+
+Because `MessageType` is a C-like enum, `serialize` routes through `serialize_unit_variant`, which `fmt::Formatter` supports. No compound type is ever needed, so the `Impossible` associated types are never reached at runtime.
+
+<Warning>
+If a `Serialize` implementation unexpectedly calls a compound method on a serializer that uses `Impossible`, it will receive an error at runtime — the method returns `Err(…)` before it would ever try to construct an `Impossible` value. The type-level guarantee is that if someone somehow produced an `Impossible` (which is impossible), its methods would still be sound.
+</Warning>
+
+## See also
+
+- [Compound Traits reference](/api/ser-compound) — `SerializeSeq`, `SerializeMap`, and the other traits that `Impossible` implements
+- [Implementing a data format](/impl-data-format) — a worked example of a complete `Serializer` that uses `Impossible` for unsupported types

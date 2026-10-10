@@ -1,72 +1,102 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Serde",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#4183c4",
+    "light": "#505050",
+    "dark": "#a4a4a4"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/bda8092e-db35-456b-8101-04f36e97cade.png",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:support@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/serde-rs/serde"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/serde-rs/serde"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "data-formats"
+            ]
+          },
+          {
+            "group": "Using Serde",
+            "pages": [
+              "derive",
+              "attributes",
+              "examples"
+            ]
+          },
+          {
+            "group": "Implementing Serde",
+            "pages": [
+              "impl-serialize",
+              "impl-deserialize",
+              "impl-data-format"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "no-std",
+              "feature-flags",
+              "custom-serialization",
+              "deserialize-in-place"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Traits",
+            "pages": [
+              "api/serialize",
+              "api/deserialize",
+              "api/serializer",
+              "api/deserializer"
+            ]
+          },
+          {
+            "group": "Serialization",
+            "pages": [
+              "api/ser-error",
+              "api/ser-compound",
+              "api/ser-impossible"
+            ]
+          },
+          {
+            "group": "Deserialization",
+            "pages": [
+              "api/de-error",
+              "api/de-visitor",
+              "api/de-access",
+              "api/de-value"
+            ]
+          },
+          {
+            "group": "Derive Macros",
+            "pages": [
+              "api/derive-serialize",
+              "api/derive-deserialize"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

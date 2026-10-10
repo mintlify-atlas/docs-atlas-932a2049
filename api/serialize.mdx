@@ -1,0 +1,208 @@
+---
+title: "Serialize Trait — Serde API Reference"
+sidebarTitle: "Serialize"
+description: "The Serialize trait marks Rust types that can be converted into any data format supported by Serde, from JSON and YAML to compact binary encodings."
+---
+
+The `Serialize` trait is the entry point for the serialization half of Serde's data model. Any type that implements `Serialize` can be converted into any data format that has a corresponding `Serializer` implementation — JSON, YAML, Postcard, TOML, and many others — without knowing anything about the target format. Serde ships with implementations for a wide range of standard library types, and the `#[derive(Serialize)]` macro generates correct implementations for most user-defined structs and enums automatically.
+
+## Trait definition
+
+```rust
+pub trait Serialize {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer;
+}
+```
+
+The single required method, `serialize`, is called with a concrete `Serializer` chosen at the call site. The method must call exactly one of the `Serializer`'s methods to map `self` into Serde's data model. The return type `Result<S::Ok, S::Error>` uses the associated types of the `Serializer`, so the output type and error type are entirely determined by the chosen format.
+
+## When to implement
+
+You need to implement `Serialize` when:
+
+- You have a type not covered by the built-in implementations listed below.
+- You want to change how an existing type serializes (for example, serializing a newtype wrapper differently from its inner value).
+- You are wrapping a type from another crate that does not ship Serde support.
+
+In the vast majority of cases, `#[derive(Serialize)]` is the right approach. Manual implementation is only necessary when the derive output would be incorrect or insufficient.
+
+<Tip>
+  Third-party crates can provide `Serialize` implementations for their own
+  types. For example, the `linked-hash-map` crate provides `Serialize` for
+  `LinkedHashMap<K, V>` so it works with any Serde format out of the box.
+</Tip>
+
+## Standard library types with built-in implementations
+
+Serde ships `Serialize` implementations for the following types. All of them can be serialized without any additional code.
+
+<CardGroup cols={2}>
+  <Card title="Primitive types">
+    - `bool`
+    - `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
+    - `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
+    - `f32`, `f64`
+    - `char`
+    - `str`
+    - `&T` and `&mut T`
+  </Card>
+  <Card title="Compound types">
+    - `[T]` (slice)
+    - `[T; 0]` through `[T; 32]` (fixed-size arrays)
+    - Tuples up to size 16
+  </Card>
+  <Card title="Common standard library types">
+    - `String`
+    - `Option<T>`
+    - `Result<T, E>`
+    - `PhantomData<T>`
+  </Card>
+  <Card title="Wrapper types">
+    - `Box<T>`
+    - `Cow<'a, T>`
+    - `Cell<T>`
+    - `RefCell<T>`
+    - `Mutex<T>`
+    - `RwLock<T>`
+    - `Rc<T>` *(requires `features = ["rc"]`)*
+    - `Arc<T>` *(requires `features = ["rc"]`)*
+  </Card>
+  <Card title="Collection types">
+    - `BTreeMap<K, V>`
+    - `BTreeSet<T>`
+    - `BinaryHeap<T>`
+    - `HashMap<K, V, H>`
+    - `HashSet<T, H>`
+    - `LinkedList<T>`
+    - `VecDeque<T>`
+    - `Vec<T>`
+  </Card>
+  <Card title="FFI types">
+    - `CStr`
+    - `CString`
+    - `OsStr`
+    - `OsString`
+  </Card>
+  <Card title="Miscellaneous standard library types">
+    - `Duration`
+    - `SystemTime`
+    - `Path`
+    - `PathBuf`
+    - `Range<T>`
+    - `RangeInclusive<T>`
+    - `Bound<T>`
+    - `num::NonZero*`
+    - `!` *(unstable)*
+  </Card>
+  <Card title="Net types">
+    - `IpAddr`
+    - `Ipv4Addr`
+    - `Ipv6Addr`
+    - `SocketAddr`
+    - `SocketAddrV4`
+    - `SocketAddrV6`
+  </Card>
+</CardGroup>
+
+## Using the derive macro
+
+For structs and enums in your own code, the `#[derive(Serialize)]` procedural macro generates a correct `Serialize` implementation automatically. Add `serde` to your `Cargo.toml` with the `derive` feature enabled:
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+Then annotate your type:
+
+```rust
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Serialize)]
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+```
+
+The generated code calls the appropriate `Serializer` methods for each field and variant, matching the Serde data model exactly. Derive attributes such as `#[serde(rename = "...")]`, `#[serde(skip)]`, and `#[serde(flatten)]` give you fine-grained control over the output without writing any serialization logic by hand.
+
+## Manual implementation example
+
+When `#[derive(Serialize)]` is not suitable, implement the trait directly. The example below shows what the derive macro would generate for a simple struct — it serializes `Person` as a three-field struct using `SerializeStruct`:
+
+```rust
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+struct Person {
+    name: String,
+    age: u8,
+    phones: Vec<String>,
+}
+
+impl Serialize for Person {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // "3" is the number of fields in the struct.
+        let mut s = serializer.serialize_struct("Person", 3)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("age", &self.age)?;
+        s.serialize_field("phones", &self.phones)?;
+        s.end()
+    }
+}
+```
+
+<Note>
+  A `Serialize` implementation must call **exactly one** top-level `Serializer`
+  method. Calling more than one, or none at all, is incorrect and may produce
+  unexpected results or errors.
+</Note>
+
+### Choosing the right Serializer method
+
+The method you call determines how the data model represents your type:
+
+| Rust type shape | Serializer method |
+|---|---|
+| `bool`, integers, floats, `char`, `str` | `serialize_bool`, `serialize_i*`, `serialize_u*`, `serialize_f*`, `serialize_char`, `serialize_str` |
+| `[u8]` byte slice | `serialize_bytes` |
+| `Option::None` | `serialize_none` |
+| `Option::Some(v)` | `serialize_some(&v)` |
+| `()` | `serialize_unit` |
+| `struct Unit` | `serialize_unit_struct("Unit")` |
+| `enum E { A }` | `serialize_unit_variant("E", 0, "A")` |
+| `struct Millimeters(u8)` | `serialize_newtype_struct("Millimeters", &self.0)` |
+| `enum E { N(u8) }` | `serialize_newtype_variant("E", 0, "N", &n)` |
+| `Vec<T>`, slices | `serialize_seq(Some(len))` |
+| Tuples, fixed arrays | `serialize_tuple(len)` |
+| `struct Rgb(u8, u8, u8)` | `serialize_tuple_struct("Rgb", 3)` |
+| `enum E { T(u8, u8) }` | `serialize_tuple_variant("E", 0, "T", 2)` |
+| `HashMap`, `BTreeMap` | `serialize_map(Some(len))` |
+| `struct S { r: u8 }` | `serialize_struct("S", 1)` |
+| `enum E { S { r: u8 } }` | `serialize_struct_variant("E", 0, "S", 1)` |
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Implementing Serialize" href="/impl-serialize">
+    Step-by-step walkthrough of manual `Serialize` implementations for a variety
+    of type shapes including enums, newtypes, and custom containers.
+  </Card>
+  <Card title="Derive macro" href="/derive">
+    Complete reference for the `#[derive(Serialize)]` macro and all supported
+    `#[serde(...)]` field and container attributes.
+  </Card>
+</CardGroup>

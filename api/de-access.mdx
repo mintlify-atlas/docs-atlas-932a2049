@@ -1,0 +1,392 @@
+---
+title: "SeqAccess, MapAccess, EnumAccess — Serde Compound Access"
+sidebarTitle: "Access Traits"
+description: "SeqAccess, MapAccess, EnumAccess, and VariantAccess give Visitors iterator-like access to sequences, maps, and enum variant data during deserialization."
+---
+
+When a `Visitor` receives a compound value — a sequence, a map, or an enum — it does not receive the data all at once. Instead, the deserializer passes an *access object* that lets the visitor pull elements one at a time. This lazy pull model keeps memory usage predictable and makes streaming deserialization straightforward. The four traits that implement this protocol are `SeqAccess`, `MapAccess`, `EnumAccess`, and `VariantAccess`.
+
+---
+
+## SeqAccess
+
+`SeqAccess` is passed to `Visitor::visit_seq`. It provides an iterator-like interface over the elements of a sequence (arrays, tuples, `Vec`, and so on).
+
+```rust
+pub trait SeqAccess<'de> {
+    type Error: Error;
+
+    /// Returns the next element, or `None` when the sequence is exhausted.
+    /// Prefer the convenience wrapper `next_element` in `Deserialize` impls.
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: DeserializeSeed<'de>;
+
+    /// Convenience wrapper — calls `next_element_seed(PhantomData)`.
+    fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+    where
+        T: Deserialize<'de> { ... }
+
+    /// Returns the number of remaining elements, if the format knows it.
+    fn size_hint(&self) -> Option<usize> { None }
+}
+```
+
+### Usage Pattern
+
+```rust
+use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
+use std::fmt;
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+struct PointVisitor;
+
+impl<'de> Visitor<'de> for PointVisitor {
+    type Value = Point;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "a sequence of two floats [x, y]")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let x = seq
+            .next_element()?
+            .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+        let y = seq
+            .next_element()?
+            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+        Ok(Point { x, y })
+    }
+}
+
+impl<'de> Deserialize<'de> for Point {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_tuple(2, PointVisitor)
+    }
+}
+```
+
+### Stateful deserialization with `next_element_seed`
+
+`next_element_seed` is the low-level primitive. It accepts anything that implements `DeserializeSeed<'de>`, which lets you pass state into a nested deserialization. In practice, `PhantomData<T>` is a `DeserializeSeed` that behaves identically to `T::deserialize`, so `next_element::<T>()` is just a shorthand.
+
+```rust
+// Appending directly into an existing Vec without extra allocation:
+while let Some(()) = seq.next_element_seed(ExtendVec(&mut vec))? {
+    // each element has been pushed onto `vec`
+}
+```
+
+<Tip>
+Use `size_hint()` to call `Vec::reserve` before collecting elements. Not all formats provide a hint, so always treat `None` gracefully.
+</Tip>
+
+---
+
+## MapAccess
+
+`MapAccess` is passed to `Visitor::visit_map`. It provides access to a sequence of key-value pairs.
+
+```rust
+pub trait MapAccess<'de> {
+    type Error: Error;
+
+    /// Returns the next key, or `None` when the map is exhausted.
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+    where
+        K: DeserializeSeed<'de>;
+
+    /// Returns the value corresponding to the most recent key.
+    ///
+    /// # Panics
+    /// Calling `next_value_seed` before `next_key_seed` is incorrect
+    /// and may panic or return bogus results.
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+    where
+        V: DeserializeSeed<'de>;
+
+    /// Returns the next key-value pair together, or `None`.
+    fn next_entry_seed<K, V>(
+        &mut self,
+        kseed: K,
+        vseed: V,
+    ) -> Result<Option<(K::Value, V::Value)>, Self::Error>
+    where
+        K: DeserializeSeed<'de>,
+        V: DeserializeSeed<'de>,
+    { ... }
+
+    // Convenience wrappers (use PhantomData as the seed internally):
+    fn next_key<K: Deserialize<'de>>(&mut self) -> Result<Option<K>, Self::Error> { ... }
+    fn next_value<V: Deserialize<'de>>(&mut self) -> Result<V, Self::Error> { ... }
+    fn next_entry<K, V>(&mut self) -> Result<Option<(K, V)>, Self::Error>
+    where
+        K: Deserialize<'de>,
+        V: Deserialize<'de>,
+    { ... }
+
+    fn size_hint(&self) -> Option<usize> { None }
+}
+```
+
+### Usage Pattern
+
+The standard struct-deserialization loop calls `next_key()` to obtain a field identifier, then `next_value()` to read its contents. You must always consume the value after calling `next_key` — even when you intend to discard it.
+
+```rust
+fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+where
+    A: MapAccess<'de>,
+{
+    let mut name: Option<String> = None;
+    let mut age: Option<u32> = None;
+
+    while let Some(key) = map.next_key::<String>()? {
+        match key.as_str() {
+            "name" => { name = Some(map.next_value()?); }
+            "age"  => { age  = Some(map.next_value()?); }
+            _      => { map.next_value::<serde::de::IgnoredAny>()?; }
+        }
+    }
+
+    Ok(Person {
+        name: name.ok_or_else(|| serde::de::Error::missing_field("name"))?,
+        age:  age .ok_or_else(|| serde::de::Error::missing_field("age"))?,
+    })
+}
+```
+
+<Warning>
+Calling `next_value` or `next_value_seed` without first calling `next_key` / `next_key_seed` is undefined behaviour at the trait level — the implementation is allowed to panic.
+</Warning>
+
+---
+
+## EnumAccess
+
+`EnumAccess` is passed to `Visitor::visit_enum`. Its single responsibility is identifying *which* variant is present, returning both the variant identifier and a `VariantAccess` object for reading the variant's content.
+
+```rust
+pub trait EnumAccess<'de>: Sized {
+    type Error: Error;
+
+    /// The VariantAccess type that will deserialize the variant's data.
+    type Variant: VariantAccess<'de, Error = Self::Error>;
+
+    /// Low-level: deserialize the variant identifier using a seed.
+    fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant), Self::Error>
+    where
+        V: DeserializeSeed<'de>;
+
+    /// Convenience wrapper — calls `variant_seed(PhantomData)`.
+    fn variant<V>(self) -> Result<(V, Self::Variant), Self::Error>
+    where
+        V: Deserialize<'de>,
+    { ... }
+}
+```
+
+### Usage Pattern
+
+```rust
+fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+where
+    A: EnumAccess<'de>,
+{
+    // Deserialize the variant name as a &str, then dispatch.
+    let (variant, access) = data.variant::<String>()?;
+    match variant.as_str() {
+        "Celsius"    => access.newtype_variant().map(MyTemp::Celsius),
+        "Fahrenheit" => access.newtype_variant().map(MyTemp::Fahrenheit),
+        other => Err(serde::de::Error::unknown_variant(
+            other,
+            &["Celsius", "Fahrenheit"],
+        )),
+    }
+}
+```
+
+---
+
+## VariantAccess
+
+`VariantAccess` is returned by `EnumAccess::variant`. After you have the variant identifier, you call one of its four methods to read the variant's data according to its shape.
+
+```rust
+pub trait VariantAccess<'de>: Sized {
+    type Error: Error;
+
+    /// Deserialize a unit variant, e.g. `Direction::North`.
+    fn unit_variant(self) -> Result<(), Self::Error>;
+
+    /// Deserialize a newtype variant, e.g. `Wrapper(u32)`.
+    /// Low-level seed form:
+    fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value, Self::Error>
+    where
+        T: DeserializeSeed<'de>;
+    /// Convenience wrapper:
+    fn newtype_variant<T: Deserialize<'de>>(self) -> Result<T, Self::Error> { ... }
+
+    /// Deserialize a tuple variant, e.g. `Coord(f64, f64)`.
+    fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>;
+
+    /// Deserialize a struct variant, e.g. `Point { x: f64, y: f64 }`.
+    fn struct_variant<V>(
+        self,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>;
+}
+```
+
+<Note>
+You must call exactly one of these four methods after receiving a `VariantAccess`. Call the one that matches the variant's actual shape as defined in your enum. If the input contains the wrong shape, construct an `invalid_type` error using `Unexpected::UnitVariant`, `Unexpected::NewtypeVariant`, etc.
+</Note>
+
+---
+
+## IgnoredAny
+
+`IgnoredAny` is a type in `serde::de` that implements `Deserialize` by accepting any input and discarding it. It is the most efficient way to skip over values whose type you do not care about.
+
+```rust
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct IgnoredAny;
+```
+
+`IgnoredAny` implements `Visitor<'de>` (where `expecting` writes "anything at all") and handles every visit method by returning `Ok(IgnoredAny)`. It also implements `Deserialize<'de>` by calling `deserializer.deserialize_ignored_any(IgnoredAny)`, which lets the format choose the most efficient skip path.
+
+### Example: skipping unknown fields
+
+```rust
+while let Some(key) = map.next_key::<String>()? {
+    match key.as_str() {
+        "name" => { name = Some(map.next_value()?); }
+        // Unknown fields: skip the value efficiently.
+        _ => { map.next_value::<IgnoredAny>()?; }
+    }
+}
+```
+
+### Example: extracting only the nth element of a sequence
+
+The following seed deserializes element `n` while discarding every other element using `IgnoredAny`:
+
+```rust
+use serde::de::{
+    self, Deserialize, DeserializeSeed, Deserializer, IgnoredAny, SeqAccess, Visitor,
+};
+use std::fmt;
+use std::marker::PhantomData;
+
+pub struct NthElement<T> {
+    n: usize,
+    marker: PhantomData<T>,
+}
+
+impl<T> NthElement<T> {
+    pub fn new(n: usize) -> Self {
+        NthElement { n, marker: PhantomData }
+    }
+}
+
+impl<'de, T> Visitor<'de> for NthElement<T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = T;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "a sequence in which we care about element {}", self.n)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        // Skip over the first `n` elements.
+        for i in 0..self.n {
+            if seq.next_element::<IgnoredAny>()?.is_none() {
+                return Err(de::Error::invalid_length(i, &self));
+            }
+        }
+
+        // Deserialize the element we care about.
+        let nth = match seq.next_element()? {
+            Some(nth) => nth,
+            None => return Err(de::Error::invalid_length(self.n, &self)),
+        };
+
+        // Drain remaining elements.
+        while let Some(IgnoredAny) = seq.next_element()? {}
+
+        Ok(nth)
+    }
+}
+
+impl<'de, T> DeserializeSeed<'de> for NthElement<T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = T;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(self)
+    }
+}
+```
+
+---
+
+## IntoDeserializer
+
+`IntoDeserializer` is a conversion trait: any type that implements it can be turned into a `Deserializer`. This is most useful when you want to deserialize a single primitive value that you already hold in memory.
+
+```rust
+pub trait IntoDeserializer<'de, E: Error = value::Error> {
+    type Deserializer: Deserializer<'de, Error = E>;
+
+    fn into_deserializer(self) -> Self::Deserializer;
+}
+```
+
+Serde provides implementations of `IntoDeserializer` for all primitive types, `&str`, `String`, `Cow<str>`, `&[u8]`, `Vec<T>`, `BTreeMap<K, V>`, `HashMap<K, V, S>`, and more via the [`de::value`](/api/de-value) module.
+
+The canonical use-case is implementing `FromStr` for an enum by delegating through `IntoDeserializer`:
+
+```rust
+use serde::de::{value, Deserialize, IntoDeserializer};
+use serde_derive::Deserialize;
+use std::str::FromStr;
+
+#[derive(Deserialize)]
+enum Setting {
+    On,
+    Off,
+}
+
+impl FromStr for Setting {
+    type Err = value::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // `s.into_deserializer()` produces a StrDeserializer<value::Error>
+        Self::deserialize(s.into_deserializer())
+    }
+}
+```
+
+For the full catalogue of concrete deserializer types provided by this trait's implementations, see the [`de::value`](/api/de-value) reference page.

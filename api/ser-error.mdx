@@ -1,0 +1,123 @@
+---
+title: "ser::Error Trait — Serde Serialization Errors"
+sidebarTitle: "ser::Error"
+description: "The ser::Error trait defines how Serialize implementations construct errors against the Serializer they are currently running against."
+---
+
+Every `Serializer` carries an associated `Error` type that represents failures encountered during serialization. The `ser::Error` trait defines a single required method — `custom` — that lets `Serialize` implementations construct those errors in a format-agnostic way, without knowing the concrete serializer they are talking to. This separation means that a `Serialize` impl written once works correctly with any `Serializer`, whether it emits JSON, MessagePack, or an in-memory tree.
+
+## Trait definition
+
+```rust
+pub trait Error: Sized {
+    /// Used when a [`Serialize`] implementation encounters any error
+    /// while serializing a type.
+    ///
+    /// The message should not be capitalized and should not end with a period.
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display;
+}
+```
+
+The bound on `T: Display` means any type that can be formatted as human-readable text is accepted as the error message. This includes string literals, `format_args!`, and any custom type that implements `Display`.
+
+<Note>
+The error message passed to `custom` should **not** be capitalized and should **not** end with a period. For example, `"path contains invalid UTF-8 characters"` is correct; `"Path contains invalid UTF-8 characters."` is not.
+</Note>
+
+## Supertraits by feature flag
+
+The supertraits required of `Error` differ depending on which Serde features are active at compile time.
+
+| Feature flag | Required supertraits |
+|---|---|
+| `std` enabled | `Sized + std::error::Error` |
+| `std` disabled | `Sized + Debug + Display` |
+
+When `std` is enabled the macro expansion is:
+
+```rust
+pub trait Error: Sized + StdError { /* … */ }
+```
+
+When `std` is disabled it becomes:
+
+```rust
+pub trait Error: Sized + Debug + Display { /* … */ }
+```
+
+This lets `ser::Error` work in `no_std` environments as long as the error type implements `Debug` and `Display`.
+
+## Using `ser::Error::custom` in a `Serialize` implementation
+
+The idiomatic way to raise a serialization error from inside a `Serialize` impl is to call `ser::Error::custom(msg)` and wrap the result in `Err(…)`. The following example is taken directly from the source documentation and shows a `Path` type that refuses to serialize when it contains invalid UTF-8:
+
+```rust
+use serde::ser::{self, Serialize, Serializer};
+
+impl Serialize for Path {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.to_str() {
+            Some(s) => serializer.serialize_str(s),
+            None => Err(ser::Error::custom("path contains invalid UTF-8 characters")),
+        }
+    }
+}
+```
+
+Because `ser::Error::custom` is a static method on the trait, the call resolves at monomorphization time to the concrete error type of whichever `Serializer` is used. The `Serialize` impl does not need to name that type explicitly.
+
+## Example: a custom serializer error type
+
+A minimal error type suitable for a custom data format must implement `ser::Error` (and, when `std` is enabled, `std::error::Error`):
+
+```rust
+use std::fmt;
+use serde::ser;
+
+#[derive(Debug)]
+pub struct MyError {
+    message: String,
+}
+
+impl fmt::Display for MyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for MyError {}
+
+impl ser::Error for MyError {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        MyError {
+            message: msg.to_string(),
+        }
+    }
+}
+```
+
+<Tip>
+Most real-world serializer crates use a crate such as `thiserror` or implement `std::error::Error` manually. The pattern above is the minimal scaffolding required by Serde.
+</Tip>
+
+## `StdError` re-export
+
+Serde re-exports the standard error base trait under the name `ser::StdError` so that code can refer to it without gating on feature flags. The re-export resolves to different paths depending on the build configuration:
+
+```rust
+// When `std` is enabled:
+pub use std::error::Error as StdError;
+
+// When `std` is disabled but `core::error::Error` is available (Rust ≥ 1.81):
+pub use core::error::Error as StdError;
+
+// When neither `std` nor `core::error::Error` is available:
+pub use crate::std_error::Error as StdError;
+```
+
+In all cases `ser::StdError` names the same trait that `ser::Error` uses as its supertrait when `std` is enabled, so crate authors can write bounds against `ser::StdError` without caring which edition of the standard library is in use.

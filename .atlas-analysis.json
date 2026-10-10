@@ -1,0 +1,116 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Serde",
+  "projectDescription": "A framework for efficiently and generically serializing and deserializing Rust data structures across any supported data format.",
+  "theme": "luma",
+  "primaryColor": "#4183c4",
+  "lightColor": "#505050",
+  "darkColor": "#a4a4a4",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "data-formats"
+            ]
+          },
+          {
+            "group": "Using Serde",
+            "pages": [
+              "derive",
+              "attributes",
+              "examples"
+            ]
+          },
+          {
+            "group": "Implementing Serde",
+            "pages": [
+              "impl-serialize",
+              "impl-deserialize",
+              "impl-data-format"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "no-std",
+              "feature-flags",
+              "custom-serialization",
+              "deserialize-in-place"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Traits",
+            "pages": [
+              "api/serialize",
+              "api/deserialize",
+              "api/serializer",
+              "api/deserializer"
+            ]
+          },
+          {
+            "group": "Serialization",
+            "pages": [
+              "api/ser-error",
+              "api/ser-compound",
+              "api/ser-impossible"
+            ]
+          },
+          {
+            "group": "Deserialization",
+            "pages": [
+              "api/de-error",
+              "api/de-visitor",
+              "api/de-access",
+              "api/de-value"
+            ]
+          },
+          {
+            "group": "Derive Macros",
+            "pages": [
+              "api/derive-serialize",
+              "api/derive-deserialize"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Zero-cost serialization/deserialization via Rust's trait system — no runtime reflection",
+    "Derive macros (#[derive(Serialize, Deserialize)]) for automatic implementations",
+    "Rich attribute system for renaming, skipping, flattening, tagging enums, and more",
+    "Works with 20+ community data formats including JSON, YAML, TOML, MessagePack, CBOR, and more",
+    "no_std support for embedded and constrained environments",
+    "Support for zero-copy deserialization via borrowed data",
+    "Customizable bounds, remote derives, and transparent wrappers"
+  ],
+  "publicApiSurface": [
+    "trait Serialize",
+    "trait Serializer",
+    "trait Deserialize<'de>",
+    "trait Deserializer<'de>",
+    "mod ser (SerializeSeq, SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, SerializeMap, SerializeStruct, SerializeStructVariant, Impossible)",
+    "mod de (Visitor, SeqAccess, MapAccess, EnumAccess, VariantAccess, IgnoredAny, IntoDeserializer, de::value::*)",
+    "#[derive(Serialize)] proc-macro",
+    "#[derive(Deserialize)] proc-macro",
+    "forward_to_deserialize_any! macro",
+    "Attribute: serde(rename), serde(rename_all), serde(alias)",
+    "Attribute: serde(skip), serde(skip_serializing), serde(skip_deserializing), serde(skip_serializing_if)",
+    "Attribute: serde(default), serde(flatten), serde(transparent)",
+    "Attribute: serde(tag), serde(content), serde(untagged)",
+    "Attribute: serde(with), serde(serialize_with), serde(deserialize_with)",
+    "Attribute: serde(bound), serde(remote), serde(from), serde(into), serde(try_from)",
+    "Attribute: serde(deny_unknown_fields), serde(crate), serde(expecting)"
+  ]
+}

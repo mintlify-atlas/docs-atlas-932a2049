@@ -1,0 +1,133 @@
+---
+title: "Derive Serialize and Deserialize Automatically"
+sidebarTitle: "Derive Macros"
+description: "Use Serde's derive macros to automatically generate Serialize and Deserialize implementations for your Rust structs and enums at compile time."
+---
+
+Serde's derive macros let you add serialization and deserialization support to your own types with a single annotation. Instead of writing the `Serialize` and `Deserialize` trait implementations by hand, you place `#[derive(Serialize, Deserialize)]` on your type and the compiler generates them for you — with no runtime overhead and no heap allocations beyond what the type itself already needs.
+
+## Enabling the derive macros
+
+The derive macros live in the `serde_derive` crate, which is re-exported through the main `serde` crate behind the `derive` feature flag. Add serde to your `Cargo.toml` like this:
+
+```toml Cargo.toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+If you only need to write handwritten `Serialize` or `Deserialize` implementations without the macros, you can omit the `derive` feature and depend on `serde` alone (or on `serde_core` in `no_std` environments):
+
+```toml Cargo.toml
+# Handwritten impls only — no proc-macro dependency
+[dependencies]
+serde = "1"
+```
+
+<Note>
+  The two proc-macro entry points are `derive_serialize` and `derive_deserialize`, exposed as `#[derive(Serialize)]` and `#[derive(Deserialize)]` respectively. They are independent: you can derive only one of them if your type only needs to go in one direction.
+</Note>
+
+## Deriving on a struct
+
+Any struct whose fields all implement `Serialize` (or `Deserialize`) can use the derive macro. Named-field structs, tuple structs, and unit structs are all supported.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.5 };
+
+    // Serialize to JSON
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(json, r#"{"x":1.0,"y":2.5}"#);
+
+    // Deserialize back
+    let p2: Point = serde_json::from_str(&json).unwrap();
+    assert_eq!(p2.x, 1.0);
+}
+```
+
+Tuple structs and newtype wrappers work the same way:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Meters(f64);
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Color(u8, u8, u8);
+```
+
+## Deriving on an enum
+
+Enums with unit variants, newtype variants, tuple variants, and struct variants are all supported:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+enum Shape {
+    Circle { radius: f64 },
+    Rectangle { width: f64, height: f64 },
+    Point,
+}
+```
+
+By default, enums are serialized in Serde's *externally tagged* representation. A `Circle` value becomes `{"Circle":{"radius":1.0}}` in JSON. You can change this with [container attributes](/attributes#enum-representations) like `#[serde(tag = "type")]`.
+
+## What the derive macros generate
+
+The macros run entirely at compile time. They inspect the structure of your type through the `syn` crate's AST representation and emit a Rust `impl` block — just as if you had written `impl Serialize for Point { … }` by hand. Because the code is generated at compile time and inlined by the Rust optimizer, there is no runtime cost compared to a manual implementation.
+
+The generated code calls into the [`Serializer`](https://docs.rs/serde/latest/serde/trait.Serializer.html) and [`Deserializer`](https://docs.rs/serde/latest/serde/trait.Deserializer.html) trait methods directly, so it works with every data format that has a Serde adapter (JSON, TOML, MessagePack, YAML, Bincode, and many others) without any format-specific knowledge in your types.
+
+## Minimum supported Rust version
+
+The `serde_derive` proc-macro crate requires **Rust 1.71 or newer**. The core `serde` crate (without `derive`) supports a lower MSRV. If you are maintaining a library with a strict MSRV policy, you can separate the two:
+
+```toml Cargo.toml
+[dependencies]
+serde = "1"          # core traits only
+
+[dev-dependencies]
+serde_derive = "1"   # macros only needed in tests
+```
+
+## Customizing the generated code
+
+The derive macros respect `#[serde(...)]` attributes placed on the container, its variants, and its fields. These let you rename fields, skip fields, apply custom serialization logic, choose an enum representation, and much more — all without changing your type's public API.
+
+See the [Attributes reference](/attributes) for the complete list of available options.
+
+<Steps>
+  <Step title="Add serde with derive feature">
+    ```toml
+    serde = { version = "1", features = ["derive"] }
+    ```
+  </Step>
+  <Step title="Import and annotate your type">
+    ```rust
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct MyConfig {
+        host: String,
+        port: u16,
+    }
+    ```
+  </Step>
+  <Step title="Serialize and deserialize with any format">
+    ```rust
+    let cfg = MyConfig { host: "localhost".into(), port: 8080 };
+    let json = serde_json::to_string(&cfg).unwrap();
+    let cfg2: MyConfig = serde_json::from_str(&json).unwrap();
+    ```
+  </Step>
+</Steps>

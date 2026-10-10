@@ -1,0 +1,66 @@
+---
+title: "Serde: A Serialization Framework for Rust"
+sidebarTitle: "Introduction"
+description: "Serde is a framework for serializing and deserializing Rust data structures efficiently and generically, with zero runtime overhead."
+---
+
+Serde is a framework for **ser**ializing and **de**serializing Rust data structures efficiently and generically. It sits at the center of a two-sided ecosystem: on one side are data structures that know how to describe themselves, and on the other are data formats that know how to encode and decode data. Serde defines the boundary between these two groups, meaning that any data structure supported by Serde can be serialized or deserialized using any supported data format — without either side knowing anything specific about the other.
+
+## How the framework works
+
+Serde's design revolves around two pairs of traits:
+
+- **`Serialize` / `Deserialize`** — implemented by data structures (your `struct`s, `enum`s, and so on). These traits teach Serde how to walk over the fields and values of a type.
+- **`Serializer` / `Deserializer`** — implemented by data format crates (like `serde_json` or `serde_toml`). These traits define how an abstract stream of typed values is encoded into or decoded from a specific wire format.
+
+When you call something like `serde_json::to_string(&my_value)`, the JSON crate's `Serializer` is driven by the `Serialize` impl on your type. The two sides communicate through a format-neutral intermediate representation — a sequence of method calls on the serializer describing each piece of data. Neither side contains any knowledge of the other, which is what makes the framework genuinely generic.
+
+## Design philosophy
+
+Where many languages rely on runtime reflection to inspect types during serialization, Serde is built on Rust's trait system and resolved entirely at compile time. Because the `Serialize` and `Deserialize` implementations are monomorphized for each concrete type and format combination, the Rust compiler can frequently inline and optimize away the entire intermediate layer. In many situations, Serde serialization performs at the same speed as a handwritten serializer written specifically for that type and format — with no runtime overhead, no heap-allocated type maps, and no dynamic dispatch required.
+
+Serde also supports `no_std` environments. By disabling the default `std` feature and optionally enabling the `alloc` feature, Serde can be used in embedded systems and other constrained contexts.
+
+## Deriving implementations
+
+The most common way to use Serde is through its procedural macro derive, which generates `Serialize` and `Deserialize` implementations automatically at compile time by inspecting the structure of your type:
+
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+```
+
+The `#[derive]` approach handles structs, enums, newtype wrappers, tuple structs, and more. For types with non-standard layouts or external formats, Serde also supports fully handwritten implementations of `Serialize` and `Deserialize` — the same traits that derive generates impls for.
+
+## The Serde ecosystem
+
+Serde itself (`serde` on crates.io) provides only the core traits and a set of standard-library implementations. Serialization to and from specific formats is handled by separate community crates. A few widely used examples:
+
+- **`serde_json`** — JSON serialization and deserialization, the most widely deployed Serde format crate.
+- **`toml`** — TOML configuration format, used by Cargo itself.
+- **`serde-yaml`** — YAML support for human-readable configuration files.
+- **`postcard`** — A compact binary format designed for `no_std` and embedded targets.
+
+A full list of supported formats is available on the [Data Formats](/data-formats) page.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Add Serde to your project and serialize your first struct in minutes.
+  </Card>
+  <Card title="Derive macros" icon="wand-magic-sparkles" href="/derive">
+    Learn how `#[derive(Serialize, Deserialize)]` works and how to enable it.
+  </Card>
+  <Card title="Attributes" icon="tag" href="/attributes">
+    Customize serialization behavior with `#[serde(...)]` field and container attributes.
+  </Card>
+  <Card title="Data Formats" icon="database" href="/data-formats">
+    Browse every data format crate in the Serde ecosystem.
+  </Card>
+</CardGroup>

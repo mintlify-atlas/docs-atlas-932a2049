@@ -1,0 +1,264 @@
+---
+title: "de::Error Trait — Serde Deserialization Errors"
+sidebarTitle: "de::Error"
+description: "The de::Error trait lets Deserialize implementations produce format-agnostic errors via custom, invalid_type, invalid_value, missing_field, and more."
+---
+
+The `de::Error` trait is the bridge between a `Deserialize` implementation and the error type of whatever `Deserializer` it is currently running against. Every `Deserializer` declares its own `Error` associated type, which must implement this trait. This means your `Deserialize` code can produce structured error messages — type mismatches, unknown fields, missing fields — without knowing anything about the underlying format. Most deserializers only need to provide `Error::custom` and inherit the default behaviour for every other method.
+
+## The `Error` Trait
+
+```rust
+pub trait Error: Sized {
+    fn custom<T: Display>(msg: T) -> Self;
+
+    fn invalid_type(unexp: Unexpected, exp: &dyn Expected) -> Self { ... }
+    fn invalid_value(unexp: Unexpected, exp: &dyn Expected) -> Self { ... }
+    fn invalid_length(len: usize, exp: &dyn Expected) -> Self { ... }
+    fn unknown_variant(variant: &str, expected: &'static [&'static str]) -> Self { ... }
+    fn unknown_field(field: &str, expected: &'static [&'static str]) -> Self { ... }
+    fn missing_field(field: &'static str) -> Self { ... }
+    fn duplicate_field(field: &'static str) -> Self { ... }
+}
+```
+
+On `std` builds the supertrait bound is `StdError` (`std::error::Error`). On `no_std` builds it is `Debug + Display`.
+
+### Method Reference
+
+<Accordion title="fn custom&lt;T: Display&gt;(msg: T) -&gt; Self">
+The only **required** method. Raised when there is a general error deserializing a type. The message should not be capitalized and should not end with a period.
+
+```rust
+use serde::de::{self, Deserialize, Deserializer};
+
+impl<'de> Deserialize<'de> for IpAddr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(de::Error::custom)
+    }
+}
+```
+</Accordion>
+
+<Accordion title="fn invalid_type(unexp: Unexpected, exp: &dyn Expected) -> Self">
+Raised when a `Deserialize` receives a **type** different from what it was expecting. `unexp` describes what the input actually contained; `exp` describes what was expected.
+
+Default implementation:
+```rust
+fn invalid_type(unexp: Unexpected, exp: &dyn Expected) -> Self {
+    Error::custom(format_args!("invalid type: {}, expected {}", unexp, exp))
+}
+```
+</Accordion>
+
+<Accordion title="fn invalid_value(unexp: Unexpected, exp: &dyn Expected) -> Self">
+Raised when a `Deserialize` receives the right **type** but a value that is wrong for another reason. For example, receiving bytes that are not valid UTF-8 when a `String` was expected.
+
+Default implementation:
+```rust
+fn invalid_value(unexp: Unexpected, exp: &dyn Expected) -> Self {
+    Error::custom(format_args!("invalid value: {}, expected {}", unexp, exp))
+}
+```
+</Accordion>
+
+<Accordion title="fn invalid_length(len: usize, exp: &dyn Expected) -> Self">
+Raised when deserializing a sequence or map that has too many or too few elements. `len` is the element count actually encountered.
+
+Default implementation:
+```rust
+fn invalid_length(len: usize, exp: &dyn Expected) -> Self {
+    Error::custom(format_args!("invalid length {}, expected {}", len, exp))
+}
+```
+</Accordion>
+
+<Accordion title="fn unknown_variant(variant: &str, expected: &'static [&'static str]) -> Self">
+Raised when a `Deserialize` enum type receives a variant name it does not recognise. Pass an empty `expected` slice when the enum has no variants at all.
+
+Default implementation produces messages like:
+- `unknown variant 'foo', expected 'Bar' or 'Baz'`
+- `unknown variant 'foo', there are no variants`
+</Accordion>
+
+<Accordion title="fn unknown_field(field: &str, expected: &'static [&'static str]) -> Self">
+Raised when a `Deserialize` struct type receives a field name it does not recognise. Typically used inside `visit_map` when processing struct fields.
+
+Default implementation produces messages like:
+- `unknown field 'xyz', expected one of 'a', 'b', 'c'`
+</Accordion>
+
+<Accordion title="fn missing_field(field: &'static str) -> Self">
+Raised when a required struct field was absent from the input.
+
+Default implementation: `missing field 'field_name'`
+</Accordion>
+
+<Accordion title="fn duplicate_field(field: &'static str) -> Self">
+Raised when the same struct field appeared more than once in the input.
+
+Default implementation: `duplicate field 'field_name'`
+</Accordion>
+
+---
+
+## The `Unexpected` Enum
+
+`Unexpected` is used as the first argument to `invalid_type`, `invalid_value`, and `invalid_length`. It describes what the input actually contained.
+
+```rust
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum Unexpected<'a> {
+    /// The input contained a boolean value that was not expected.
+    Bool(bool),
+
+    /// The input contained an unsigned integer `u8`, `u16`, `u32` or `u64`.
+    Unsigned(u64),
+
+    /// The input contained a signed integer `i8`, `i16`, `i32` or `i64`.
+    Signed(i64),
+
+    /// The input contained a floating point `f32` or `f64`.
+    Float(f64),
+
+    /// The input contained a `char`.
+    Char(char),
+
+    /// The input contained a `&str` or `String`.
+    Str(&'a str),
+
+    /// The input contained a `&[u8]` or `Vec<u8>`.
+    Bytes(&'a [u8]),
+
+    /// The input contained a unit `()`.
+    Unit,
+
+    /// The input contained an `Option<T>`.
+    Option,
+
+    /// The input contained a newtype struct.
+    NewtypeStruct,
+
+    /// The input contained a sequence.
+    Seq,
+
+    /// The input contained a map.
+    Map,
+
+    /// The input contained an enum.
+    Enum,
+
+    /// The input contained a unit variant.
+    UnitVariant,
+
+    /// The input contained a newtype variant.
+    NewtypeVariant,
+
+    /// The input contained a tuple variant.
+    TupleVariant,
+
+    /// The input contained a struct variant.
+    StructVariant,
+
+    /// An uncategorized unexpected value. The message should be a noun or noun
+    /// phrase, not capitalized and without a period.
+    Other(&'a str),
+}
+```
+
+`Unexpected` implements `Display`, so error messages are formatted automatically — for example, `Unexpected::Bool(true)` displays as `boolean 'true'` and `Unexpected::Seq` displays as `sequence`.
+
+### Example: using `Unexpected` in a Visitor
+
+```rust
+use serde::de::{self, Unexpected, Visitor};
+use std::fmt;
+
+struct BoolVisitor;
+
+impl<'de> Visitor<'de> for BoolVisitor {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "a boolean")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(v)
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::invalid_type(Unexpected::Str(v), &self))
+    }
+}
+```
+
+---
+
+## The `Expected` Trait
+
+`Expected` is used as the second argument to `invalid_type`, `invalid_value`, and `invalid_length`. It formats an explanation of what was expected.
+
+```rust
+pub trait Expected {
+    /// Format an explanation of what data was being expected.
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result;
+}
+```
+
+Two blanket implementations are provided by Serde:
+
+- **`impl<'de, T: Visitor<'de>> Expected for T`** — inside a `Visitor` implementation, `&self` is directly usable as an `Expected` argument. Serde calls `Visitor::expecting` to fill in the message.
+- **`impl Expected for &str`** — outside a `Visitor`, any `&"string literal"` works as the expected argument.
+
+```rust
+// Inside a Visitor — &self implements Expected via the blanket impl:
+Err(de::Error::invalid_type(Unexpected::Bool(v), &self))
+
+// Outside a Visitor — a string literal works too:
+Err(de::Error::invalid_type(
+    Unexpected::Bool(v),
+    &"a negative integer",
+))
+```
+
+<Note>
+The `Expected` message should complete the sentence "This Visitor expects to receive …". It should not be capitalized and should not end with a period.
+</Note>
+
+---
+
+## `de::value::Error`
+
+`serde::de::value::Error` is a minimal, self-contained implementation of `de::Error` for use with the [`IntoDeserializer`](/api/de-access) trait and the types in the [`de::value`](/api/de-value) module.
+
+```rust
+#[derive(Clone, PartialEq)]
+pub struct Error { /* ... */ }
+
+impl de::Error for Error {
+    fn custom<T: Display>(msg: T) -> Self { ... }
+}
+
+impl Display for Error { ... }
+impl Debug for Error { ... }
+
+// On std builds only:
+impl std::error::Error for Error { ... }
+```
+
+On `std`/`alloc` builds the error message is stored as a `Box<str>`. On pure `no_std` without `alloc`, the error carries no message but still satisfies the trait bound.
+
+<Tip>
+Use `value::Error` as the `Err` type when implementing `FromStr` via `IntoDeserializer`. See the [`de::value`](/api/de-value) page for a complete worked example.
+</Tip>

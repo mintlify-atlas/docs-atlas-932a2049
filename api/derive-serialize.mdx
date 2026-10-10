@@ -1,0 +1,445 @@
+---
+title: "#[derive(Serialize)] — Serde Derive Macro Reference"
+sidebarTitle: "derive(Serialize)"
+description: "Automatically generate a Serialize implementation for any Rust struct or enum using Serde's proc-macro derive, with full attribute reference."
+---
+
+The `#[derive(Serialize)]` macro automatically generates a complete `Serialize` implementation for any Rust struct or enum. It inspects the type's fields and variants at compile time and emits the serialization logic so you never have to write it by hand. The macro is provided by the `serde_derive` crate and is re-exported through serde's `derive` feature flag.
+
+## Enabling the derive macro
+
+Add serde to your `Cargo.toml` with the `derive` feature enabled:
+
+```toml
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+```
+
+The `derive` feature pulls in `serde_derive` as an optional dependency. `serde_derive` requires **Rust 1.71 or later** (it relies on proc-macro infrastructure introduced in that release; the `serde` library itself supports Rust 1.56+).
+
+## Proc-macro signature
+
+The macro is registered in `serde_derive` as:
+
+```rust
+#[proc_macro_derive(Serialize, attributes(serde))]
+pub fn derive_serialize(input: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(input as DeriveInput);
+    ser::expand_derive_serialize(&mut input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+```
+
+The `attributes(serde)` registration means that every `#[serde(...)]` attribute attached to the annotated type and its fields/variants is consumed by this macro and not passed to the compiler as an unknown attribute.
+
+## Basic usage
+
+<Tabs>
+  <Tab title="Named struct">
+    A named-field struct is serialized as a map. Each field name becomes a key in the output map.
+
+    ```rust
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    // JSON: {"x": 1.0, "y": 2.0}
+    ```
+  </Tab>
+  <Tab title="Tuple struct">
+    A tuple struct is serialized as a sequence. Fields are emitted in declaration order with no keys.
+
+    ```rust
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct Color(u8, u8, u8);
+    // JSON: [255, 0, 128]
+    ```
+  </Tab>
+  <Tab title="Unit struct">
+    A unit struct (no fields) is serialized as a unit value. In JSON that is `null`; in other formats it may be omitted entirely.
+
+    ```rust
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct Nothing;
+    // JSON: null
+    ```
+  </Tab>
+  <Tab title="Enum">
+    By default enums use **external tagging**: the variant name is the sole key and its content is the value.
+
+    ```rust
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    enum Shape {
+        Circle { radius: f64 },
+        Rectangle { width: f64, height: f64 },
+        Point,
+    }
+    // Circle  → {"Circle":{"radius":1.0}}
+    // Point   → "Point"
+    ```
+  </Tab>
+</Tabs>
+
+## How the derive handles each kind of type
+
+| Rust type | Default serialized form |
+|---|---|
+| Named-field struct | Map — field names are keys |
+| Tuple struct | Sequence — fields in order |
+| Unit struct | Unit (`null` in JSON) |
+| Newtype struct `Foo(T)` | The inner value `T` directly |
+| Enum (external tag, default) | `{"VariantName": <content>}` |
+| Enum unit variant | `"VariantName"` string |
+
+## Container attributes
+
+Container attributes are placed on the struct or enum itself: `#[serde(...)]` directly above the `struct` or `enum` keyword.
+
+<AccordionGroup>
+  <Accordion title="rename / rename_all / rename_all_fields">
+    **`rename = "name"`** — Use a different name when serializing this type's representation (affects the type name in self-describing formats).
+
+    **`rename(serialize = "ser_name")`** — Set only the serialized name, leaving the deserialized name unchanged (useful when both derives are present).
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(rename = "point_2d")]
+    struct Point { x: f64, y: f64 }
+    ```
+
+    **`rename_all = "rule"`** — Apply a naming convention to every field (struct) or every variant (enum). Accepted values (from `case.rs`):
+
+    | Value | Example transform |
+    |---|---|
+    | `"lowercase"` | `myField` → `myfield` |
+    | `"UPPERCASE"` | `myField` → `MYFIELD` |
+    | `"PascalCase"` | `my_field` → `MyField` |
+    | `"camelCase"` | `my_field` → `myField` |
+    | `"snake_case"` | `myField` → `my_field` (no-op for fields) |
+    | `"SCREAMING_SNAKE_CASE"` | `my_field` → `MY_FIELD` |
+    | `"kebab-case"` | `my_field` → `my-field` |
+    | `"SCREAMING-KEBAB-CASE"` | `my_field` → `MY-FIELD` |
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Config {
+        max_retries: u32,     // serialized as "maxRetries"
+        base_url: String,     // serialized as "baseUrl"
+    }
+    ```
+
+    **`rename_all_fields = "rule"`** — Like `rename_all` but applies the rule to the *fields inside every variant* of an enum (only valid on enums).
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(rename_all_fields = "camelCase")]
+    enum Message {
+        Request { request_id: u64, body: String },
+        Response { status_code: u16 },
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="tag / content / untagged — enum representation">
+    Serde supports four enum representations. These container attributes control which one is used.
+
+    **External tagging (default)** — no attribute needed:
+    ```rust
+    #[derive(Serialize)]
+    enum Event { Move { x: i32, y: i32 }, Quit }
+    // {"Move":{"x":10,"y":20}}  or  "Quit"
+    ```
+
+    **Internal tagging** — `#[serde(tag = "type")]`:
+    ```rust
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum Event {
+        Move { x: i32, y: i32 },
+        Quit,
+    }
+    // {"type":"Move","x":10,"y":20}
+    // {"type":"Quit"}
+    ```
+
+    **Adjacent tagging** — `#[serde(tag = "t", content = "c")]`:
+    ```rust
+    #[derive(Serialize)]
+    #[serde(tag = "t", content = "c")]
+    enum Event {
+        Move { x: i32, y: i32 },
+        Color(u8, u8, u8),
+    }
+    // {"t":"Move","c":{"x":10,"y":20}}
+    // {"t":"Color","c":[255,0,0]}
+    ```
+
+    **Untagged** — `#[serde(untagged)]`:
+    ```rust
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum StringOrInt { Str(String), Int(i64) }
+    // "hello"  or  42
+    ```
+
+    <Note>
+      `#[serde(tag = "...")]` cannot be used with tuple variants that have more than one field. It can be applied to enums or to structs with named fields.
+    </Note>
+  </Accordion>
+
+  <Accordion title="transparent">
+    **`transparent`** — Serialize a newtype struct or a single-field struct as if it were its inner type. The struct wrapper becomes invisible in the output.
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(transparent)]
+    struct Wrapper(String);
+    // Serializes as a plain string, not {"0":"hello"}
+    ```
+  </Accordion>
+
+  <Accordion title="into">
+    **`into = "Type"`** — Before serializing, convert `self` into `Type` by calling `Into::into`. Useful for serializing a type via a simpler proxy.
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(into = "String")]
+    struct Version { major: u32, minor: u32 }
+
+    impl From<Version> for String {
+        fn from(v: Version) -> String {
+            format!("{}.{}", v.major, v.minor)
+        }
+    }
+    ```
+
+    <Note>
+      When `into` is set, the `Serialize` impl delegates entirely to the `Into` conversion; individual field attributes are ignored for serialization.
+    </Note>
+  </Accordion>
+
+  <Accordion title="remote">
+    **`remote = "path::to::Type"`** — Implement `Serialize` for a remote type that you do not own. The annotated struct must mirror the remote type's fields exactly, and the generated impl is for the annotated type used as a proxy.
+
+    ```rust
+    // Serializing std::time::Duration, which does not implement Serialize
+    #[derive(Serialize)]
+    #[serde(remote = "std::time::Duration")]
+    struct DurationDef {
+        #[serde(getter = "std::time::Duration::as_secs")]
+        secs: u64,
+        #[serde(getter = "std::time::Duration::subsec_nanos")]
+        nanos: u32,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="bound">
+    **`bound = "T: Serialize"`** — Override the trait bounds that Serde infers for the generated `impl`. Accepts a comma-separated list of `where` predicates.
+
+    **`bound(serialize = "...")`** — Set the bound only for the `Serialize` impl.
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(bound(serialize = "T: Serialize + Clone"))]
+    struct Wrapper<T> {
+        value: T,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="deny_unknown_fields">
+    **`deny_unknown_fields`** — Valid on structs. Causes deserialization to fail if any unknown fields are present. Has no direct effect on the `Serialize` impl but is present on the container and read during both derive passes when both traits are derived together.
+  </Accordion>
+
+  <Accordion title="crate">
+    **`crate = "path"`** — Specify a custom path to the `serde` crate. Required when `serde` is re-exported or renamed.
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(crate = "my_crate::serde")]
+    struct Foo { bar: u32 }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Field attributes
+
+Field attributes are placed on individual fields inside a struct or enum variant.
+
+<AccordionGroup>
+  <Accordion title="rename">
+    **`rename = "name"`** — Use a custom key name for this field when serializing.
+
+    **`rename(serialize = "name")`** — Set only the serialized key, leaving the deserialized key unchanged.
+
+    ```rust
+    #[derive(Serialize)]
+    struct Request {
+        #[serde(rename = "user_id")]
+        id: u64,
+    }
+    // {"user_id": 42}
+    ```
+  </Accordion>
+
+  <Accordion title="skip / skip_serializing / skip_serializing_if">
+    **`skip`** — Omit this field from both serialization and deserialization.
+
+    **`skip_serializing`** — Omit this field from the serialized output only. The field must still satisfy `Default` for deserialization.
+
+    **`skip_serializing_if = "path::to::fn"`** — Call the given predicate function at runtime; if it returns `true`, omit the field. The function receives a reference to the field value and must return `bool`.
+
+    ```rust
+    #[derive(Serialize)]
+    struct Config {
+        host: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(skip)]
+        internal_cache: Vec<u8>,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="serialize_with / with">
+    **`serialize_with = "path::to::fn"`** — Use a custom function instead of the field type's own `Serialize` impl. The function must have the signature:
+
+    ```rust
+    fn serialize<S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer
+    ```
+
+    **`with = "module"`** — Shorthand: looks for both `module::serialize` (for the `Serialize` derive) and `module::deserialize` (for the `Deserialize` derive) in the same module.
+
+    ```rust
+    mod as_unix_timestamp {
+        use serde::Serializer;
+        pub fn serialize<S>(ts: &std::time::SystemTime, s: S) -> Result<S::Ok, S::Error>
+        where S: Serializer {
+            let secs = ts.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            s.serialize_u64(secs)
+        }
+    }
+
+    #[derive(Serialize)]
+    struct Event {
+        #[serde(with = "as_unix_timestamp")]
+        timestamp: std::time::SystemTime,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="flatten">
+    **`flatten`** — Inline this field's contents into the parent map instead of nesting it under a key. Works for fields whose type serializes as a map (structs, `HashMap`) or as a sequence.
+
+    ```rust
+    #[derive(Serialize)]
+    struct Pagination {
+        page: u32,
+        per_page: u32,
+    }
+
+    #[derive(Serialize)]
+    struct Response {
+        data: Vec<String>,
+        #[serde(flatten)]
+        pagination: Pagination,
+    }
+    // {"data":[...],"page":1,"per_page":20}
+    ```
+  </Accordion>
+
+  <Accordion title="bound (field-level)">
+    **`bound = "T: Serialize"`** — Override the inferred `Serialize` bound for this specific field's type parameter.
+
+    **`bound(serialize = "...")`** — Target only the serialization bound.
+  </Accordion>
+
+  <Accordion title="getter (remote derive)">
+    **`getter = "path::to::fn"`** — Used with `#[serde(remote = "...")]`. Specifies how to obtain the field's value from the remote type since the derive cannot access private fields directly.
+
+    ```rust
+    #[derive(Serialize)]
+    #[serde(remote = "std::time::Duration")]
+    struct DurationDef {
+        #[serde(getter = "std::time::Duration::as_secs")]
+        secs: u64,
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Variant attributes
+
+Variant attributes are placed on individual variants of an enum.
+
+<AccordionGroup>
+  <Accordion title="rename">
+    **`rename = "name"`** — Use a custom name for this variant when serializing.
+
+    **`rename(serialize = "name")`** — Set only the serialized name.
+
+    ```rust
+    #[derive(Serialize)]
+    enum Direction {
+        #[serde(rename = "N")]
+        North,
+        #[serde(rename = "S")]
+        South,
+    }
+    // "N" or "S"
+    ```
+  </Accordion>
+
+  <Accordion title="skip_serializing">
+    **`skip_serializing`** — Attempting to serialize a value of this variant will produce a serialization error at runtime. Useful for variants that are only constructed internally and must never appear in output.
+
+    ```rust
+    #[derive(Serialize)]
+    enum Status {
+        Active,
+        #[serde(skip_serializing)]
+        InternalOnly,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="serialize_with / with">
+    **`serialize_with = "path::to::fn"`** — Use a custom serialization function for the entire variant. The function receives the variant's fields as arguments.
+
+    **`with = "module"`** — Looks for `module::serialize` for the `Serialize` derive.
+  </Accordion>
+
+  <Accordion title="bound (variant-level)">
+    **`bound = "T: Serialize"`** — Override the inferred serialization bound for this variant's type parameters.
+
+    **`bound(serialize = "...")`** — Target only the serialization bound.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Serialize-specific and deserialize-specific values for `rename`, `rename_all`, and `bound` can be set independently using the `(serialize = "...", deserialize = "...")` form. This is especially useful when the serialized and deserialized names differ, or when you need different trait bounds for each direction.
+</Tip>
+
+<Warning>
+  `#[serde(into = "Type")]` and field-level `serialize_with` / `skip_serializing_if` cannot both be active on the same field, as `into` bypasses all field-level logic.
+</Warning>
+
+## Related pages
+
+- [Attribute reference](/attributes) — Complete documentation for every `#[serde(...)]` attribute.
+- [`Serialize` trait](/api/serialize) — The trait that this macro implements.
+- [`#[derive(Deserialize)]`](/api/derive-deserialize) — The companion derive macro for deserialization.

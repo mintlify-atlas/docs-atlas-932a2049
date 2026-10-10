@@ -1,0 +1,161 @@
+---
+title: "Serde Feature Flags: derive, alloc, rc, and More"
+sidebarTitle: "Feature Flags"
+description: "A complete reference for every Serde feature flag — std, derive, alloc, rc, unstable — with examples and guidance on when to use each."
+---
+
+Serde exposes a small, carefully designed set of Cargo feature flags that control which types and capabilities are compiled in. Understanding these flags is important for tuning compile times, enabling `no_std` support, or opting into niche functionality such as `Rc<T>` and `Arc<T>` serialization. By default, only `std` is enabled; every other feature must be opted into explicitly.
+
+## Feature Flag Reference
+
+<AccordionGroup>
+  <Accordion title="std (default)" icon="check">
+    **Enabled by default.** Provides `Serialize` and `Deserialize` implementations for the full set of Rust standard library types. Requires a dependency on the Rust standard library, so it must be disabled for `no_std` targets.
+
+    Types unlocked: `HashMap`, `HashSet`, `OsStr`, `OsString`, `Path`, `PathBuf`, `Mutex`, `RwLock`, `SystemTime`, `IpAddr`, `SocketAddr`, and all atomic types.
+
+    ```toml
+    # Enabled implicitly — this is the same as writing nothing:
+    serde = { version = "1" }
+
+    # Disable to use serde in no_std environments:
+    serde = { version = "1", default-features = false }
+    ```
+  </Accordion>
+
+  <Accordion title="derive" icon="wand-magic-sparkles">
+    Enables the `#[derive(Serialize, Deserialize)]` procedural macros by pulling in the `serde_derive` crate. Without this flag you must either depend on `serde_derive` directly or implement the traits by hand.
+
+    ```toml
+    serde = { version = "1", features = ["derive"] }
+    ```
+
+    ```rust
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    ```
+
+    The proc-macro runs entirely at compile time on the host machine. It has no effect on the binary produced for the target and works correctly in `no_std` environments.
+  </Accordion>
+
+  <Accordion title="alloc" icon="server">
+    Provides implementations for types in the Rust `alloc` crate — `String`, `Box<T>`, `Vec<T>`, `Cow<T>`, `BTreeMap`, `BTreeSet`, and more — without requiring the full standard library. Use this on targets that have a global allocator but no `std`.
+
+    ```toml
+    serde = { version = "1", default-features = false, features = ["alloc"] }
+    ```
+
+    The `alloc` feature is a strict subset of `std`: everything available with `alloc` is also available with `std`. Notably, `HashMap` and `HashSet` are **not** part of `alloc` — use `BTreeMap` and `BTreeSet` when targeting `no_std + alloc`.
+  </Accordion>
+
+  <Accordion title="rc" icon="arrows-rotate">
+    Opts into `Serialize` and `Deserialize` implementations for `Rc<T>` and `Arc<T>`.
+
+    ```toml
+    serde = { version = "1", features = ["rc"] }
+    ```
+
+    This feature is intentionally opt-in rather than enabled by default.
+
+    <Warning>
+      Serializing and deserializing `Rc<T>` or `Arc<T>` **does not preserve
+      pointer identity**. Each deserialized value will be an independent
+      allocation — shared references are not reconstructed. If two fields in
+      your data structure point to the same `Rc<T>`, you will end up with two
+      separate copies after a round-trip. Enable this feature only if you are
+      certain that is acceptable for your use case.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="unstable" icon="flask">
+    Provides implementations for Rust types that require unstable compiler features. Progress and discussion are tracked in [serde-rs/serde#812](https://github.com/serde-rs/serde/issues/812).
+
+    ```toml
+    serde = { version = "1", features = ["unstable"] }
+    ```
+
+    This feature requires a nightly Rust compiler. It is intended for experimentation and tracking purposes; the set of types it covers may change between releases.
+  </Accordion>
+</AccordionGroup>
+
+## All Feature Flags at a Glance
+
+| Feature | Default | Requires | Description |
+|---|---|---|---|
+| `std` | ✅ Yes | Rust std | Impls for `HashMap`, `Path`, `OsStr`, atomics, etc. |
+| `derive` | ❌ No | — | Enables `#[derive(Serialize, Deserialize)]` |
+| `alloc` | ❌ No | global allocator | Impls for `String`, `Vec`, `Box`, `BTreeMap`, etc. |
+| `rc` | ❌ No | `alloc` or `std` | Impls for `Rc<T>` and `Arc<T>` (no identity preservation) |
+| `unstable` | ❌ No | nightly Rust | Impls for unstable types (see issue #812) |
+
+## Minimum Supported Rust Versions
+
+<Note>
+  Serde and its companion crates have different MSRV requirements:
+
+  - **`serde`** (core traits and runtime): Rust **1.56**
+  - **`serde_derive`** (proc-macro crate): Rust **1.71**
+
+  If you use the `derive` feature flag (which pulls in `serde_derive`), your
+  project's effective MSRV is **1.71**. If you only use the traits directly and
+  implement them by hand, you can target Rust 1.56.
+</Note>
+
+## Example: no_std + alloc + derive
+
+This is the most common configuration for embedded targets that have a heap allocator:
+
+```toml Cargo.toml
+[package]
+name = "my-firmware"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Enable derive and alloc; disable std for no_std targets.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+```
+
+```rust src/lib.rs
+#![no_std]
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Packet {
+    pub id: u32,
+    pub payload: Vec<u8>,
+    pub label: String,
+}
+```
+
+## Example: std + derive + rc
+
+For applications that need to serialize reference-counted data:
+
+```toml Cargo.toml
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+```
+
+```rust
+use std::rc::Rc;
+use serde::{Deserialize, Serialize};
+
+// WARNING: Rc identity is NOT preserved across serialization.
+// Two fields pointing to the same Rc will become independent
+// copies after deserialization.
+#[derive(Serialize, Deserialize)]
+struct Config {
+    name: Rc<String>,
+    value: Rc<String>,
+}
+```

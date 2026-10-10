@@ -1,0 +1,608 @@
+---
+title: "#[derive(Deserialize)] — Serde Derive Macro Reference"
+sidebarTitle: "derive(Deserialize)"
+description: "Generate a complete Deserialize implementation—including a Visitor, field identifier enum, and full deserialization logic—for any Rust struct or enum."
+---
+
+The `#[derive(Deserialize)]` macro generates a complete `Deserialize` implementation for any Rust struct or enum. Under the hood it emits several items: a `Visitor` type that drives the deserialization, a field-identifier enum whose variants correspond to the field names, and the full deserialization logic for each supported data format representation. The macro is provided by the `serde_derive` crate and re-exported through serde's `derive` feature flag.
+
+## Enabling the derive macro
+
+Add serde to your `Cargo.toml` with the `derive` feature enabled:
+
+```toml
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+```
+
+The `derive` feature pulls in `serde_derive` as an optional dependency. `serde_derive` requires **Rust 1.71 or later** (it relies on proc-macro infrastructure introduced in that release; the `serde` library itself supports Rust 1.56+).
+
+## Proc-macro signature
+
+The macro is registered in `serde_derive` as:
+
+```rust
+#[proc_macro_derive(Deserialize, attributes(serde))]
+pub fn derive_deserialize(input: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(input as DeriveInput);
+    de::expand_derive_deserialize(&mut input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+```
+
+The `attributes(serde)` registration ensures that every `#[serde(...)]` attribute on the type and its fields/variants is consumed by this macro rather than being reported as an unknown attribute by the compiler.
+
+## Basic usage
+
+<Tabs>
+  <Tab title="Named struct">
+    A named-field struct is deserialized from a map. Each key in the input is matched against the struct's field names.
+
+    ```rust
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    // Deserializes from: {"x": 1.0, "y": 2.0}
+    ```
+  </Tab>
+  <Tab title="Tuple struct">
+    A tuple struct is deserialized from a sequence. Elements are read in declaration order.
+
+    ```rust
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Color(u8, u8, u8);
+    // Deserializes from: [255, 0, 128]
+    ```
+  </Tab>
+  <Tab title="Unit struct">
+    A unit struct is deserialized from a unit value. In JSON, `null` maps to a unit struct.
+
+    ```rust
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Nothing;
+    // Deserializes from: null
+    ```
+  </Tab>
+  <Tab title="Enum">
+    By default enums use **external tagging**: the variant name is expected as the sole key.
+
+    ```rust
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    enum Shape {
+        Circle { radius: f64 },
+        Rectangle { width: f64, height: f64 },
+        Point,
+    }
+    // {"Circle":{"radius":1.0}}  →  Shape::Circle { radius: 1.0 }
+    // "Point"                    →  Shape::Point
+    ```
+  </Tab>
+</Tabs>
+
+## Enum representation modes
+
+This is one of the most important aspects of `#[derive(Deserialize)]`. Serde supports four distinct ways to represent an enum in a self-describing format. All four are controlled by container-level attributes.
+
+<Tabs>
+  <Tab title="External (default)">
+    No attribute required. The variant name is the key; its content is the value. Unit variants are represented as plain strings.
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Message {
+        Quit,
+        Move { x: i32, y: i32 },
+        Write(String),
+    }
+    ```
+
+    ```json
+    "Quit"
+    {"Move": {"x": 10, "y": 20}}
+    {"Write": "hello"}
+    ```
+  </Tab>
+  <Tab title="Internal tag">
+    `#[serde(tag = "type")]` — A designated field inside the content carries the variant name. All variants must serialize as maps (structs with named fields or unit variants); tuple variants with more than one field are not supported.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(tag = "type")]
+    enum Message {
+        Quit,
+        Move { x: i32, y: i32 },
+    }
+    ```
+
+    ```json
+    {"type": "Quit"}
+    {"type": "Move", "x": 10, "y": 20}
+    ```
+
+    <Note>
+      `#[serde(tag = "...")]` cannot be combined with tuple variants that have more than one field. It can be applied to enums or to structs with named fields.
+    </Note>
+  </Tab>
+  <Tab title="Adjacent tag">
+    `#[serde(tag = "t", content = "c")]` — Two sibling fields in a map hold the tag and the content separately. Works with all variant shapes including tuples.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(tag = "t", content = "c")]
+    enum Message {
+        Move { x: i32, y: i32 },
+        Color(u8, u8, u8),
+    }
+    ```
+
+    ```json
+    {"t": "Move",  "c": {"x": 10, "y": 20}}
+    {"t": "Color", "c": [255, 0, 0]}
+    ```
+  </Tab>
+  <Tab title="Untagged">
+    `#[serde(untagged)]` — No tag field at all. The deserializer tries each variant in declaration order and returns the first one that succeeds. Produces the most compact representation but can give confusing error messages on failure.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrInt {
+        Str(String),
+        Int(i64),
+    }
+    ```
+
+    ```json
+    "hello"
+    42
+    ```
+
+    <Warning>
+      Untagged enums that share the same shape (e.g. two struct variants with the same fields) will always match the first variant. Ordering matters.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Container attributes
+
+Container attributes are placed on the struct or enum itself.
+
+<AccordionGroup>
+  <Accordion title="rename / rename_all / rename_all_fields">
+    **`rename = "name"`** — Use a different name when matching keys during deserialization.
+
+    **`rename(deserialize = "de_name")`** — Set only the deserialized name, leaving the serialized name unchanged.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(rename = "point_2d")]
+    struct Point { x: f64, y: f64 }
+    ```
+
+    **`rename_all = "rule"`** — Apply a naming convention to every field (struct) or variant (enum). Accepted values:
+
+    | Value | Example (field) |
+    |---|---|
+    | `"lowercase"` | `my_field` → `myfield` |
+    | `"UPPERCASE"` | `my_field` → `MYFIELD` |
+    | `"PascalCase"` | `my_field` → `MyField` |
+    | `"camelCase"` | `my_field` → `myField` |
+    | `"snake_case"` | `my_field` → `my_field` (no-op for fields) |
+    | `"SCREAMING_SNAKE_CASE"` | `my_field` → `MY_FIELD` |
+    | `"kebab-case"` | `my_field` → `my-field` |
+    | `"SCREAMING-KEBAB-CASE"` | `my_field` → `MY-FIELD` |
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Config {
+        max_retries: u32,   // expects "maxRetries" in input
+        base_url: String,   // expects "baseUrl" in input
+    }
+    ```
+
+    **`rename_all_fields = "rule"`** — Apply the naming rule to the fields *inside every variant* of an enum. Only valid on enums.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(rename_all_fields = "camelCase")]
+    enum Message {
+        Request { request_id: u64, body: String },
+        Response { status_code: u16 },
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="tag / content / untagged — enum representation">
+    See the [Enum representation modes](#enum-representation-modes) section above for detailed examples of all four modes.
+
+    - **`#[serde(tag = "field")]`** — Internal tagging.
+    - **`#[serde(tag = "t", content = "c")]`** — Adjacent tagging.
+    - **`#[serde(untagged)]`** — Untagged; no discriminator field.
+
+    `content` requires `tag` and is only valid on enums. `untagged` and `tag` are mutually exclusive.
+  </Accordion>
+
+  <Accordion title="from / try_from">
+    **`from = "Type"`** — After deserializing `Type`, call `From<Type>` to construct `Self`. The target type must implement `Deserialize`, and `Self` must implement `From<Type>`.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(from = "String")]
+    struct Version { major: u32, minor: u32 }
+
+    impl From<String> for Version {
+        fn from(s: String) -> Self {
+            let parts: Vec<_> = s.split('.').collect();
+            Version {
+                major: parts[0].parse().unwrap_or(0),
+                minor: parts[1].parse().unwrap_or(0),
+            }
+        }
+    }
+    ```
+
+    **`try_from = "Type"`** — Like `from`, but uses `TryFrom<Type>`. If the conversion fails, the error is reported as a deserialization error.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(try_from = "u8")]
+    struct Port(u16);
+
+    impl TryFrom<u8> for Port {
+        type Error = &'static str;
+        fn try_from(v: u8) -> Result<Self, Self::Error> {
+            if v > 0 { Ok(Port(v as u16)) } else { Err("port must be non-zero") }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="transparent">
+    **`transparent`** — Deserialize a newtype struct or a single-field struct as if it were its inner type. The wrapping struct is invisible to the deserializer.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(transparent)]
+    struct UserId(u64);
+    // Deserializes from a plain integer, not {"0": 42}
+    ```
+  </Accordion>
+
+  <Accordion title="remote">
+    **`remote = "path::to::Type"`** — Implement `Deserialize` for a remote type you do not own. The annotated struct must mirror the remote type's fields exactly.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(remote = "std::ops::Range")]
+    struct RangeDef<Idx> {
+        start: Idx,
+        end: Idx,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="default">
+    **`default`** — If a field is missing from the input, fill it using `Default::default()`. Applied at the struct level, this covers all missing fields at once.
+
+    **`default = "path::to::fn"`** — Use a custom function instead of `Default::default()`. The function must have signature `fn() -> StructType`.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(default)]
+    struct Config {
+        host: String,
+        port: u16,       // uses u16::default() = 0 if missing
+    }
+    ```
+
+    <Note>
+      `default` on a container is only valid for structs with fields, not unit structs or enums.
+    </Note>
+  </Accordion>
+
+  <Accordion title="deny_unknown_fields">
+    **`deny_unknown_fields`** — Return an error if the input contains any key that does not correspond to a known field. By default Serde silently ignores unknown fields.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Strict {
+        known: String,
+    }
+    // {"known":"ok","extra":"oops"} → deserialization error
+    ```
+
+    <Warning>
+      `deny_unknown_fields` is incompatible with `#[serde(flatten)]` on any field of the same struct. The flattened field absorbs all remaining keys, preventing the unknown-fields check from working correctly.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="expecting">
+    **`expecting = "a message"`** — Override the error message produced when the input type does not match. The message appears in: `invalid type: …, expected <your message>`.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(expecting = "a JSON object with x and y fields")]
+    struct Point { x: f64, y: f64 }
+    ```
+  </Accordion>
+
+  <Accordion title="non_exhaustive">
+    **`#[non_exhaustive]`** (standard Rust attribute, not `#[serde(...)]`) — When present on an enum or struct, Serde's generated deserializer respects it. Unknown variants on a `non_exhaustive` enum do not cause a deserialization error; they are silently ignored if a catch-all mechanism is available.
+  </Accordion>
+
+  <Accordion title="bound">
+    **`bound = "T: Deserialize<'de>"`** — Override the trait bounds that Serde infers for the generated `impl`. Accepts a comma-separated list of `where` predicates.
+
+    **`bound(deserialize = "...")`** — Set the bound only for the `Deserialize` impl.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(bound(deserialize = "T: Deserialize<'de> + Default"))]
+    struct Wrapper<T> {
+        value: T,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="crate">
+    **`crate = "path"`** — Specify a custom path to the `serde` crate. Required when `serde` is re-exported or renamed.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(crate = "my_crate::serde")]
+    struct Foo { bar: u32 }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Field attributes
+
+Field attributes are placed on individual fields inside a struct or enum variant.
+
+<AccordionGroup>
+  <Accordion title="rename / alias">
+    **`rename = "name"`** — Match this field against a different key name in the input.
+
+    **`rename(deserialize = "name")`** — Set only the deserialized key name.
+
+    **`alias = "name"`** — Accept an additional alternative key name for this field during deserialization. Multiple `alias` attributes may be stacked.
+
+    ```rust
+    #[derive(Deserialize)]
+    struct Request {
+        #[serde(rename = "user_id")]
+        id: u64,
+        #[serde(alias = "desc", alias = "description")]
+        summary: String,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="skip / skip_deserializing / default">
+    **`skip`** — Exclude this field from both serialization and deserialization. The field is initialized using `Default::default()` (or the custom default if set).
+
+    **`skip_deserializing`** — Do not read this field from the input. Initialize it with `Default::default()` unless a field-level `default` is also provided.
+
+    **`default`** — If the field is absent from the input, use `Default::default()` instead of failing.
+
+    **`default = "path::to::fn"`** — If the field is absent, call this function to produce the default value. The function must return the field's type.
+
+    ```rust
+    #[derive(Deserialize)]
+    struct Config {
+        host: String,
+        #[serde(default = "default_port")]
+        port: u16,
+        #[serde(skip_deserializing)]
+        connection_pool: Vec<()>,
+    }
+
+    fn default_port() -> u16 { 8080 }
+    ```
+  </Accordion>
+
+  <Accordion title="deserialize_with / with">
+    **`deserialize_with = "path::to::fn"`** — Use a custom function instead of the field type's own `Deserialize` impl. The function must have the signature:
+
+    ```rust
+    fn deserialize<'de, D>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: serde::Deserializer<'de>
+    ```
+
+    **`with = "module"`** — Shorthand: looks for both `module::deserialize` (for the `Deserialize` derive) and `module::serialize` (for the `Serialize` derive) in the same module.
+
+    ```rust
+    mod from_str {
+        use serde::Deserializer;
+        use std::str::FromStr;
+        pub fn deserialize<'de, T, D>(d: D) -> Result<T, D::Error>
+        where
+            T: FromStr,
+            T::Err: std::fmt::Display,
+            D: Deserializer<'de>,
+        {
+            let s = String::deserialize(d)?;
+            T::from_str(&s).map_err(serde::de::Error::custom)
+        }
+        use serde::Deserialize;
+    }
+
+    #[derive(Deserialize)]
+    struct Record {
+        #[serde(deserialize_with = "from_str::deserialize")]
+        count: u64,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="flatten">
+    **`flatten`** — Inline this field's keys into the parent map rather than reading them under a nested key. The field's type must deserialize from a map or from the remaining keys in the map.
+
+    ```rust
+    #[derive(Deserialize)]
+    struct Pagination {
+        page: u32,
+        per_page: u32,
+    }
+
+    #[derive(Deserialize)]
+    struct Response {
+        data: Vec<String>,
+        #[serde(flatten)]
+        pagination: Pagination,
+    }
+    // Deserializes from: {"data":[...],"page":1,"per_page":20}
+    ```
+
+    <Warning>
+      `flatten` is not compatible with `deny_unknown_fields` on the same struct.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="borrow">
+    **`borrow`** — Tell the `Deserialize` derive to borrow data from the deserializer's input lifetime `'de` for this field. Used for fields of type `&str`, `&[u8]`, or `Cow<str>` / `Cow<[u8]>` to avoid unnecessary allocations.
+
+    **`borrow = "'a + 'b"`** — Borrow only the specified lifetimes rather than all available lifetimes.
+
+    ```rust
+    #[derive(Deserialize)]
+    struct ZeroCopy<'a> {
+        #[serde(borrow)]
+        text: &'a str,
+    }
+    ```
+
+    <Note>
+      `&str` and `&[u8]` are always implicitly borrowed. The `borrow` attribute is required only for `Cow<str>` and `Cow<[u8]>` to opt into borrowing.
+    </Note>
+  </Accordion>
+
+  <Accordion title="bound (field-level)">
+    **`bound = "T: Deserialize<'de>"`** — Override the inferred `Deserialize` bound for this specific field's type parameter.
+
+    **`bound(deserialize = "...")`** — Target only the deserialization bound.
+  </Accordion>
+</AccordionGroup>
+
+## Variant attributes
+
+Variant attributes are placed on individual variants of an enum.
+
+<AccordionGroup>
+  <Accordion title="rename / alias">
+    **`rename = "name"`** — Match this variant against a different tag name in the input.
+
+    **`rename(deserialize = "name")`** — Set only the deserialized tag name.
+
+    **`alias = "name"`** — Accept an additional alternative tag name for this variant. Multiple `alias` attributes may be stacked on the same variant.
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Direction {
+        #[serde(rename = "N", alias = "north")]
+        North,
+        #[serde(rename = "S", alias = "south")]
+        South,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="skip_deserializing">
+    **`skip_deserializing`** — Ignore this variant entirely during deserialization. The variant can never be produced by the `Deserialize` impl; values that would match it will be treated as unknown variants (an error unless `#[serde(other)]` is present elsewhere).
+  </Accordion>
+
+  <Accordion title="other">
+    **`other`** — Catch-all variant for unrecognized variant names. When the input contains a tag that does not match any known variant, this unit variant is returned instead of an error. Only one variant per enum may carry `other`.
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Color {
+        Red,
+        Green,
+        Blue,
+        #[serde(other)]
+        Unknown,
+    }
+    // "Purple" → Color::Unknown
+    ```
+  </Accordion>
+
+  <Accordion title="deserialize_with / with">
+    **`deserialize_with = "path::to::fn"`** — Use a custom function to deserialize this entire variant. The function receives a deserializer and returns `Result<VariantType, D::Error>`.
+
+    **`with = "module"`** — Shorthand module containing both `module::serialize` and `module::deserialize`.
+  </Accordion>
+
+  <Accordion title="untagged (variant-level)">
+    **`untagged`** (on a single variant) — Mark one specific variant as untagged within an otherwise tagged enum. That variant is tried without a tag; all other variants still require one.
+
+    ```rust
+    #[derive(Deserialize)]
+    #[serde(tag = "type")]
+    enum Message {
+        Move { x: i32, y: i32 },
+        #[serde(untagged)]
+        Raw(String),  // matches any string not consumed by a tagged variant
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="bound (variant-level)">
+    **`bound = "T: Deserialize<'de>"`** — Override the inferred deserialization bound for this variant's type parameters.
+
+    **`bound(deserialize = "...")`** — Target only the deserialization bound.
+  </Accordion>
+</AccordionGroup>
+
+## What the macro generates
+
+For a named-field struct, the `Deserialize` derive emits roughly the following (simplified):
+
+<CodeGroup>
+```rust Input
+#[derive(Deserialize)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+```
+
+```rust Generated (conceptual)
+impl<'de> Deserialize<'de> for Point {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // 1. A field-identifier enum:
+        //    enum __Field { __field0 /* x */, __field1 /* y */, __ignore }
+        // 2. A Visitor that drives map deserialization:
+        //    struct __Visitor; impl Visitor<'de> for __Visitor { ... }
+        // 3. d.deserialize_struct("Point", &["x","y"], __Visitor)
+        todo!()
+    }
+}
+```
+</CodeGroup>
+
+The generated visitor handles missing fields (using `default` if configured), unknown fields (ignoring them or erroring if `deny_unknown_fields` is set), and type mismatches (propagating the deserializer's error).
+
+<Tip>
+  Deserialize-specific names, bounds, and defaults can all be set independently from their serialize counterparts using the `(serialize = "...", deserialize = "...")` form. This is useful when serializing and deserializing under different field names or when the required trait bounds differ between the two directions.
+</Tip>
+
+## Related pages
+
+- [Attribute reference](/attributes) — Complete documentation for every `#[serde(...)]` attribute.
+- [`Deserialize` trait](/api/deserialize) — The trait that this macro implements.
+- [`#[derive(Serialize)]`](/api/derive-serialize) — The companion derive macro for serialization.

@@ -1,0 +1,628 @@
+---
+title: "Serde Usage Examples: Structs, Enums, and Custom Types"
+sidebarTitle: "Examples"
+description: "Practical Rust examples showing how to use Serde to serialize and deserialize structs, enums, nested types, optional fields, and custom formats."
+---
+
+The best way to learn Serde is by reading working code. The examples on this page cover the most common patterns you'll encounter: plain structs, enums in different representations, field renaming, struct flattening, conditional skipping, and plugging in custom serialization logic. Every snippet compiles against the current Serde 1.x API and can be dropped into a project that has `serde = { version = "1", features = ["derive"] }` and `serde_json = "1"` in its dependencies.
+
+<Tabs>
+  <Tab title="Structs">
+
+## Basic named-field struct
+
+The simplest case: a struct whose fields all implement `Serialize` and `Deserialize`. Field names become JSON keys by default.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.5 };
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(json, r#"{"x":1.0,"y":2.5}"#);
+
+    let p2: Point = serde_json::from_str(&json).unwrap();
+    assert_eq!(p, p2);
+}
+```
+
+## Nested structs
+
+Serde derives implementations recursively. Any field whose type also implements `Serialize`/`Deserialize` is handled automatically.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Address {
+    street: String,
+    city: String,
+    zip: String,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct User {
+    id: u64,
+    name: String,
+    address: Address,
+}
+
+fn main() {
+    let u = User {
+        id: 1,
+        name: "Alice".into(),
+        address: Address {
+            street: "1 Main St".into(),
+            city: "Springfield".into(),
+            zip: "12345".into(),
+        },
+    };
+
+    let json = serde_json::to_string_pretty(&u).unwrap();
+    let u2: User = serde_json::from_str(&json).unwrap();
+    assert_eq!(u, u2);
+}
+```
+
+## Struct with optional fields
+
+Use `Option<T>` for fields that may be absent. Combine with `#[serde(skip_serializing_if = "Option::is_none")]` to omit `null` from the output entirely.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Profile {
+    username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+}
+
+fn main() {
+    let minimal = Profile {
+        username: "alice".into(),
+        bio: None,
+        avatar_url: None,
+    };
+
+    let json = serde_json::to_string(&minimal).unwrap();
+    // No "bio" or "avatar_url" keys appear
+    assert_eq!(json, r#"{"username":"alice"}"#);
+
+    let full = Profile {
+        username: "bob".into(),
+        bio: Some("Rustacean".into()),
+        avatar_url: Some("https://example.com/bob.png".into()),
+    };
+    let json2 = serde_json::to_string(&full).unwrap();
+    let full2: Profile = serde_json::from_str(&json2).unwrap();
+    assert_eq!(full, full2);
+}
+```
+
+  </Tab>
+  <Tab title="Enums">
+
+## Unit variants
+
+An enum with only unit variants serializes as a plain string (in JSON):
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn main() {
+    let d = Direction::North;
+    let json = serde_json::to_string(&d).unwrap();
+    assert_eq!(json, r#""North""#);
+
+    let d2: Direction = serde_json::from_str(&json).unwrap();
+    assert_eq!(d, d2);
+}
+```
+
+## Newtype and tuple variants
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+enum Value {
+    Integer(i64),
+    Float(f64),
+    Text(String),
+    Pair(i32, i32),
+}
+
+fn main() {
+    // Externally tagged by default:
+    // {"Integer":42}
+    // {"Pair":[1,2]}
+    let v = Value::Integer(42);
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, r#"{"Integer":42}"#);
+
+    let pair = Value::Pair(1, 2);
+    let json2 = serde_json::to_string(&pair).unwrap();
+    assert_eq!(json2, r#"{"Pair":[1,2]}"#);
+}
+```
+
+## Internally tagged enum
+
+The variant name is included as a field inside the content object. Ideal for JSON APIs that use a `"type"` discriminant field.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum Event {
+    Click { x: i32, y: i32 },
+    KeyPress { key: String },
+    Scroll { delta: f64 },
+}
+
+fn main() {
+    let e = Event::Click { x: 100, y: 200 };
+    let json = serde_json::to_string(&e).unwrap();
+    assert_eq!(json, r#"{"type":"Click","x":100,"y":200}"#);
+
+    let e2: Event = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, e2);
+}
+```
+
+## Adjacently tagged enum
+
+The variant name and payload are placed as two sibling fields.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
+enum Packet {
+    Ping,
+    Message { text: String },
+    Error { code: u32, reason: String },
+}
+
+fn main() {
+    let p = Packet::Message { text: "hello".into() };
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(json, r#"{"kind":"Message","data":{"text":"hello"}}"#);
+}
+```
+
+## Untagged enum
+
+No envelope. Each variant is tried in order during deserialization; the first that matches is used.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StringOrInt {
+    Text(String),
+    Number(i64),
+}
+
+fn main() {
+    let t: StringOrInt = serde_json::from_str(r#""hello""#).unwrap();
+    let n: StringOrInt = serde_json::from_str("42").unwrap();
+
+    assert_eq!(t, StringOrInt::Text("hello".into()));
+    assert_eq!(n, StringOrInt::Number(42));
+}
+```
+
+  </Tab>
+  <Tab title="Renaming">
+
+## Rename individual fields
+
+`#[serde(rename = "...")]` changes the key used in the wire format without changing the Rust field name.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Article {
+    #[serde(rename = "article_id")]
+    id: u64,
+    #[serde(rename = "article_title")]
+    title: String,
+}
+
+fn main() {
+    let a = Article { id: 1, title: "Intro to Serde".into() };
+    let json = serde_json::to_string(&a).unwrap();
+    assert_eq!(json, r#"{"article_id":1,"article_title":"Intro to Serde"}"#);
+}
+```
+
+## rename_all for consistent casing
+
+Apply a single naming convention to every field at once:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateUserRequest {
+    display_name: String,
+    email_address: String,
+    is_admin: bool,
+}
+
+fn main() {
+    let req = CreateUserRequest {
+        display_name: "Alice".into(),
+        email_address: "alice@example.com".into(),
+        is_admin: false,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    // Fields become "displayName", "emailAddress", "isAdmin"
+    assert_eq!(
+        json,
+        r#"{"displayName":"Alice","emailAddress":"alice@example.com","isAdmin":false}"#
+    );
+}
+```
+
+## Different names for serialization and deserialization
+
+Use the two-argument form of `rename` when your input and output formats differ (for example, reading `snake_case` from a legacy API and writing `camelCase` to a new one):
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct LegacyRecord {
+    #[serde(rename(serialize = "userId", deserialize = "user_id"))]
+    user_id: u64,
+    #[serde(rename(serialize = "createdAt", deserialize = "created_at"))]
+    created_at: String,
+}
+
+fn main() {
+    // Deserialize from snake_case input
+    let json_in = r#"{"user_id":5,"created_at":"2024-01-01"}"#;
+    let r: LegacyRecord = serde_json::from_str(json_in).unwrap();
+
+    // Serialize to camelCase output
+    let json_out = serde_json::to_string(&r).unwrap();
+    assert_eq!(json_out, r#"{"userId":5,"createdAt":"2024-01-01"}"#);
+}
+```
+
+## Rename enum variants
+
+`rename_all` works on enums to rename all variant names:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TaskStatus {
+    NotStarted,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+fn main() {
+    let s = TaskStatus::InProgress;
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(json, r#""in_progress""#);
+}
+```
+
+  </Tab>
+  <Tab title="Flattening">
+
+## Flatten a nested struct into its parent
+
+`#[serde(flatten)]` removes the wrapper key and merges the nested struct's fields directly into the parent object:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Timestamps {
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Post {
+    id: u64,
+    title: String,
+    #[serde(flatten)]
+    timestamps: Timestamps,
+}
+
+fn main() {
+    let post = Post {
+        id: 1,
+        title: "Hello Serde".into(),
+        timestamps: Timestamps {
+            created_at: "2024-01-01".into(),
+            updated_at: "2024-06-01".into(),
+        },
+    };
+
+    let json = serde_json::to_string(&post).unwrap();
+    // Flat structure: no "timestamps" wrapper key
+    let expected = r#"{"id":1,"title":"Hello Serde","created_at":"2024-01-01","updated_at":"2024-06-01"}"#;
+    assert_eq!(json, expected);
+
+    let post2: Post = serde_json::from_str(&json).unwrap();
+    assert_eq!(post, post2);
+}
+```
+
+## Collect extra fields with a flattened HashMap
+
+Use a `HashMap<String, Value>` with `#[serde(flatten)]` to capture any fields that are not explicitly declared in the struct:
+
+```rust
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Config {
+    name: String,
+    version: u32,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+fn main() {
+    let json = r#"{"name":"myapp","version":2,"debug":true,"workers":4}"#;
+    let cfg: Config = serde_json::from_str(json).unwrap();
+
+    assert_eq!(cfg.name, "myapp");
+    assert_eq!(cfg.version, 2);
+    assert_eq!(cfg.extra["debug"], serde_json::json!(true));
+    assert_eq!(cfg.extra["workers"], serde_json::json!(4));
+
+    // Round-trips back to the original JSON
+    let json2 = serde_json::to_string(&cfg).unwrap();
+    let cfg2: Config = serde_json::from_str(&json2).unwrap();
+    assert_eq!(cfg2.name, cfg.name);
+}
+```
+
+  </Tab>
+  <Tab title="Skip & Default">
+
+## Skip fields unconditionally
+
+`#[serde(skip)]` omits the field from both serialization and deserialization. The field must be initializable from `Default` since it won't be read from input.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Session {
+    user_id: u64,
+    token: String,
+    #[serde(skip)]
+    internal_cache: Vec<String>, // never appears in serialized form
+}
+
+fn main() {
+    let s = Session {
+        user_id: 42,
+        token: "abc123".into(),
+        internal_cache: vec!["cached".into()],
+    };
+
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(json, r#"{"user_id":42,"token":"abc123"}"#);
+
+    // internal_cache is initialized to Vec::default() on deserialization
+    let s2: Session = serde_json::from_str(&json).unwrap();
+    assert_eq!(s2.internal_cache, Vec::<String>::new());
+}
+```
+
+## Skip serializing when a condition is met
+
+`#[serde(skip_serializing_if = "path")]` omits a field only when the predicate returns `true`:
+
+```rust
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct ApiResponse {
+    status: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_message: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    retry_after: u32,
+}
+
+fn is_zero(n: &u32) -> bool { *n == 0 }
+
+fn main() {
+    let ok = ApiResponse {
+        status: 200,
+        error_message: None,
+        warnings: vec![],
+        retry_after: 0,
+    };
+    let json = serde_json::to_string(&ok).unwrap();
+    assert_eq!(json, r#"{"status":200}"#);
+
+    let err = ApiResponse {
+        status: 429,
+        error_message: Some("rate limited".into()),
+        warnings: vec![],
+        retry_after: 60,
+    };
+    let json2 = serde_json::to_string(&err).unwrap();
+    assert_eq!(json2, r#"{"status":429,"error_message":"rate limited","retry_after":60}"#);
+}
+```
+
+## Supply default values for missing fields
+
+Use `#[serde(default)]` or `#[serde(default = "fn_path")]` to make fields optional during deserialization:
+
+```rust
+use serde::Deserialize;
+
+fn default_port() -> u16 { 8080 }
+fn default_workers() -> usize { 4 }
+
+#[derive(Debug, Deserialize)]
+struct ServerConfig {
+    host: String,
+    #[serde(default = "default_port")]
+    port: u16,
+    #[serde(default = "default_workers")]
+    workers: usize,
+    #[serde(default)]
+    tls_enabled: bool,
+}
+
+fn main() {
+    // Minimal input: only required field provided
+    let json = r#"{"host":"0.0.0.0"}"#;
+    let cfg: ServerConfig = serde_json::from_str(json).unwrap();
+
+    assert_eq!(cfg.host, "0.0.0.0");
+    assert_eq!(cfg.port, 8080);
+    assert_eq!(cfg.workers, 4);
+    assert!(!cfg.tls_enabled);
+}
+```
+
+  </Tab>
+  <Tab title="Custom with">
+
+## Custom serializer for a date field
+
+Use `#[serde(with = "module")]` to plug in a module that handles a type Serde doesn't know about natively:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+mod date_format {
+    use serde::{Deserializer, Serializer};
+
+    const FORMAT: &str = "%Y-%m-%d";
+
+    pub fn serialize<S: Serializer>(
+        date: &chrono::NaiveDate,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&date.format(FORMAT).to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<chrono::NaiveDate, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        chrono::NaiveDate::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Event {
+    name: String,
+    #[serde(with = "date_format")]
+    date: chrono::NaiveDate,
+}
+```
+
+## Custom serialize_with and deserialize_with on one field
+
+When you need different functions for each direction, use the split form:
+
+```rust
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+fn serialize_as_bool<S: Serializer>(value: &i32, ser: S) -> Result<S::Ok, S::Error> {
+    ser.serialize_bool(*value == 123)
+}
+
+fn deserialize_from_bool<'de, D: Deserializer<'de>>(de: D) -> Result<i32, D::Error> {
+    let flag: bool = Deserialize::deserialize(de)?;
+    Ok(if flag { 123 } else { 0 })
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Record {
+    id: u32,
+    #[serde(
+        serialize_with = "serialize_as_bool",
+        deserialize_with = "deserialize_from_bool"
+    )]
+    flag_value: i32,
+}
+
+fn main() {
+    let r = Record { id: 1, flag_value: 123 };
+    let json = serde_json::to_string(&r).unwrap();
+    assert_eq!(json, r#"{"id":1,"flag_value":true}"#);
+
+    let r2: Record = serde_json::from_str(&json).unwrap();
+    assert_eq!(r2.flag_value, 123);
+}
+```
+
+## Serialize a type that doesn't implement Serialize
+
+If a field's type doesn't implement `Serialize`, you can skip it with `#[serde(skip_serializing)]` or provide a custom function with `#[serde(serialize_with)]`:
+
+```rust
+use serde::{Serialize, Serializer};
+use std::sync::Arc;
+
+// Hypothetical non-Serialize type
+struct Handle(Arc<Vec<u8>>);
+
+fn serialize_handle_len<S: Serializer>(h: &Handle, ser: S) -> Result<S::Ok, S::Error> {
+    ser.serialize_u64(h.0.len() as u64)
+}
+
+#[derive(Serialize)]
+struct Buffer {
+    name: String,
+    #[serde(serialize_with = "serialize_handle_len")]
+    data: Handle,
+}
+```
+
+  </Tab>
+</Tabs>
+
+---
+
+<Note>
+  All examples on this page use `serde_json` as the format. The same `#[derive(Serialize, Deserialize)]` annotations work unchanged with any other Serde-compatible format such as `toml`, `bincode`, `postcard`, or `rmp-serde` — no code changes required in your types.
+</Note>

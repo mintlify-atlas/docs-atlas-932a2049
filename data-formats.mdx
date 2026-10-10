@@ -1,0 +1,119 @@
+---
+title: "Serde Data Formats: JSON, YAML, TOML, and More"
+sidebarTitle: "Data Formats"
+description: "A complete guide to every data format crate in the Serde ecosystem, from JSON and YAML to embedded binary formats and environment variables."
+---
+
+One of Serde's core design decisions is the clean separation between data structures and data formats. The `serde` crate defines the `Serialize`, `Deserialize`, `Serializer`, and `Deserializer` traits, but it does not bundle any concrete format. Format crates implement the `Serializer` and `Deserializer` traits to teach Serde how to encode and decode data in a specific representation. Because these two halves interact only through Serde's trait boundary, any data structure that derives or implements `Serialize`/`Deserialize` works automatically with every format crate — with no changes to the struct or enum itself.
+
+## Widely used formats
+
+<CardGroup cols={2}>
+  <Card title="JSON" icon="brackets-curly" href="https://github.com/serde-rs/json">
+    The ubiquitous JavaScript Object Notation used by most HTTP APIs. The `serde_json` crate is the most widely deployed Serde format crate.
+  </Card>
+  <Card title="TOML" icon="file-lines" href="https://docs.rs/toml">
+    A minimal configuration format used by Cargo and many Rust-ecosystem tools. The `toml` crate provides full read/write support.
+  </Card>
+  <Card title="YAML" icon="file-code" href="https://github.com/dtolnay/serde-yaml">
+    A human-friendly configuration language. The `serde-yaml` crate handles both serialization and deserialization.
+  </Card>
+  <Card title="Postcard" icon="microchip" href="https://github.com/jamesmunns/postcard">
+    A `no_std` and embedded-systems-friendly compact binary format designed for constrained environments.
+  </Card>
+</CardGroup>
+
+## All supported formats
+
+The following table lists every data format that has been implemented for Serde by the community, along with its crate location and any directionality constraints.
+
+| Format | Description | Crate | Notes |
+|--------|-------------|-------|-------|
+| **JSON** | Ubiquitous JavaScript Object Notation used by many HTTP APIs | [serde-rs/json](https://github.com/serde-rs/json) | |
+| **Postcard** | `no_std` and embedded-systems friendly compact binary format | [jamesmunns/postcard](https://github.com/jamesmunns/postcard) | |
+| **CBOR** | Concise Binary Object Representation designed for small message size without version negotiation | [enarx/ciborium](https://github.com/enarx/ciborium) | |
+| **YAML** | Self-proclaimed human-friendly configuration language | [dtolnay/serde-yaml](https://github.com/dtolnay/serde-yaml) | |
+| **MessagePack** | Efficient binary format that resembles a compact JSON | [3Hren/msgpack-rust](https://github.com/3Hren/msgpack-rust) | |
+| **TOML** | Minimal configuration format used by Cargo | [docs.rs/toml](https://docs.rs/toml) | |
+| **Pickle** | Format common in the Python world | [birkenfeld/serde-pickle](https://github.com/birkenfeld/serde-pickle) | |
+| **RON** | Rusty Object Notation | [ron-rs/ron](https://github.com/ron-rs/ron) | |
+| **BSON** | Data storage and network transfer format used by MongoDB | [mongodb/bson-rust](https://github.com/mongodb/bson-rust) | |
+| **Avro** | Binary format used within Apache Hadoop, with schema definition support | [docs.rs/apache-avro](https://docs.rs/apache-avro) | |
+| **JSON5** | Superset of JSON including some productions from ES5 | [callum-oakley/json5-rs](https://github.com/callum-oakley/json5-rs) | |
+| **URL query strings** | URL encoding in the x-www-form-urlencoded format | [docs.rs/serde_qs](https://docs.rs/serde_qs) | |
+| **Starlark** | Format used for build targets by the Bazel and Buck build systems | [dtolnay/serde-starlark](https://github.com/dtolnay/serde-starlark) | Serialization only |
+| **Envy** | Deserialize environment variables into Rust structs | [softprops/envy](https://github.com/softprops/envy) | Deserialization only |
+| **S-expressions** | Textual representation of code and data used by the Lisp language family | [rotty/lexpr-rs](https://github.com/rotty/lexpr-rs) | |
+| **D-Bus** | D-Bus binary wire format | [docs.rs/zvariant](https://docs.rs/zvariant) | |
+| **FlexBuffers** | Schemaless cousin of Google's FlatBuffers zero-copy serialization format | [google/flatbuffers](https://github.com/google/flatbuffers/tree/master/rust/flexbuffers) | |
+| **Bencode** | Simple binary format used in the BitTorrent protocol | [P3KI/bendy](https://github.com/P3KI/bendy) | |
+| **Token streams** | Rust procedural macro token stream processing | [oxidecomputer/serde_tokenstream](https://github.com/oxidecomputer/serde_tokenstream) | Deserialization only |
+| **DynamoDB Items** | Format used to transfer data to and from DynamoDB | [docs.rs/serde_dynamo](https://docs.rs/serde_dynamo) | |
+| **Hjson** | Syntax extension to JSON designed for human reading and editing | [Canop/deser-hjson](https://github.com/Canop/deser-hjson) | Deserialization only |
+| **CSV** | Comma-separated values tabular text format | [docs.rs/csv](https://docs.rs/csv) | |
+
+## How to use any format
+
+Every format crate follows the same basic pattern. The crate provides top-level functions (commonly `to_string` / `from_str`, `to_vec` / `from_slice`, or `to_writer` / `from_reader` depending on whether the format is text or binary) that accept any type implementing `Serialize` or `Deserialize`. Your data types never need to change between formats.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Config {
+    host: String,
+    port: u16,
+    debug: bool,
+}
+```
+
+Because `Config` derives `Serialize` and `Deserialize`, it works with every format without modification:
+
+```rust
+fn main() {
+    let config = Config {
+        host: "localhost".to_string(),
+        port: 8080,
+        debug: true,
+    };
+
+    // --- JSON ---
+    let json = serde_json::to_string(&config).unwrap();
+    println!("JSON:    {}", json);
+    // {"host":"localhost","port":8080,"debug":true}
+
+    let from_json: Config = serde_json::from_str(&json).unwrap();
+    println!("from JSON:  {:?}", from_json);
+
+    // --- TOML ---
+    let toml_str = toml::to_string(&config).unwrap();
+    println!("TOML:\n{}", toml_str);
+    // host = "localhost"
+    // port = 8080
+    // debug = true
+
+    let from_toml: Config = toml::from_str(&toml_str).unwrap();
+    println!("from TOML:  {:?}", from_toml);
+
+    // --- YAML ---
+    let yaml = serde_yaml::to_string(&config).unwrap();
+    println!("YAML:\n{}", yaml);
+
+    let from_yaml: Config = serde_yaml::from_str(&yaml).unwrap();
+    println!("from YAML:  {:?}", from_yaml);
+}
+```
+
+The corresponding `Cargo.toml` for the example above:
+
+```toml
+[dependencies]
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml       = "0.8"
+serde-yaml = "0.9"
+```
+
+<Note>
+  Format crates that are listed as **serialization only** or **deserialization only** implement only one half of the `Serializer`/`Deserializer` pair. You can still derive both `Serialize` and `Deserialize` on your types — you simply cannot use the direction that the crate does not support.
+</Note>

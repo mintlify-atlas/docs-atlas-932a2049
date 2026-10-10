@@ -1,0 +1,433 @@
+---
+title: "Serializer Compound Traits: SerializeSeq, SerializeMap, and More"
+sidebarTitle: "Compound Traits"
+description: "Reference for all seven Serde compound serializer traits — SerializeSeq, SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, SerializeMap, SerializeStruct, and SerializeStructVariant."
+---
+
+When a `Serializer` encounters a compound type — a sequence, map, tuple, struct, or enum variant — it cannot serialize the entire value in a single method call. Instead, the corresponding `Serializer` method (such as `serialize_seq` or `serialize_struct`) returns a stateful object that the caller drives incrementally: serialize each element or field one at a time, then call `end()` to finalize the output and recover the `Ok` value. Serde defines seven traits that describe these stateful serializer objects, one for each compound kind in the data model.
+
+## General pattern
+
+Every compound serialization follows the same three-step lifecycle:
+
+1. **Start** — call the appropriate `Serializer` method (e.g. `serialize_seq`), receiving an object that implements the matching trait.
+2. **Feed** — call the trait's field or element method repeatedly (e.g. `serialize_element`, `serialize_field`).
+3. **Finish** — call `end()`, which returns `Result<Self::Ok, Self::Error>` and signals to the serializer that no more data is coming.
+
+<Note>
+Each compound trait carries `type Ok` and `type Error` associated types that **must** match the `Ok` and `Error` types of the parent `Serializer`. The type system enforces this when you declare the associated types on your `Serializer` impl.
+</Note>
+
+---
+
+## SerializeSeq
+
+Returned from `Serializer::serialize_seq`. Represents a variably-sized, heterogeneous sequence such as `Vec<T>` or `HashSet<T>`. The length may or may not be known in advance.
+
+### Trait definition
+
+```rust
+pub trait SerializeSeq {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a sequence element.
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Finish serializing a sequence.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeSeq, Serializer};
+
+impl<T> Serialize for Vec<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for element in self {
+            seq.serialize_element(element)?;
+        }
+        seq.end()
+    }
+}
+```
+
+The optional `len` argument passed to `serialize_seq` is a hint to the serializer. Pass `Some(n)` when the length is known up front; pass `None` when it is not. Some formats require a known length and will return an error if `None` is supplied.
+
+---
+
+## SerializeTuple
+
+Returned from `Serializer::serialize_tuple`. Represents a statically-sized, heterogeneous sequence whose length is known at deserialization time without inspecting the data, such as a Rust tuple `(A, B, C)` or a fixed-size array `[T; N]`.
+
+### Trait definition
+
+```rust
+pub trait SerializeTuple {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a tuple element.
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Finish serializing a tuple.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeTuple, Serializer};
+
+impl<A, B, C> Serialize for (A, B, C)
+where
+    A: Serialize,
+    B: Serialize,
+    C: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tup = serializer.serialize_tuple(3)?;
+        tup.serialize_element(&self.0)?;
+        tup.serialize_element(&self.1)?;
+        tup.serialize_element(&self.2)?;
+        tup.end()
+    }
+}
+```
+
+Unlike `SerializeSeq`, the length passed to `serialize_tuple` is always exact and required — there is no `Option<usize>`.
+
+---
+
+## SerializeTupleStruct
+
+Returned from `Serializer::serialize_tuple_struct`. Represents a named tuple struct such as `struct Rgb(u8, u8, u8)`. Fields are anonymous (positional) and serialized by calling `serialize_field`.
+
+### Trait definition
+
+```rust
+pub trait SerializeTupleStruct {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a tuple struct field.
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Finish serializing a tuple struct.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeTupleStruct, Serializer};
+
+struct Rgb(u8, u8, u8);
+
+impl Serialize for Rgb {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut ts = serializer.serialize_tuple_struct("Rgb", 3)?;
+        ts.serialize_field(&self.0)?;
+        ts.serialize_field(&self.1)?;
+        ts.serialize_field(&self.2)?;
+        ts.end()
+    }
+}
+```
+
+<Tip>
+The method is named `serialize_field` (not `serialize_element`) to mirror the terminology of structs, even though the fields are positional and carry no name.
+</Tip>
+
+---
+
+## SerializeTupleVariant
+
+Returned from `Serializer::serialize_tuple_variant`. Represents a tuple-style enum variant such as `E::T` in `enum E { T(u8, u8) }`.
+
+### Trait definition
+
+```rust
+pub trait SerializeTupleVariant {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a tuple variant field.
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Finish serializing a tuple variant.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeTupleVariant, Serializer};
+
+enum E {
+    T(u8, u8),
+    U(String, u32, u32),
+}
+
+impl Serialize for E {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match *self {
+            E::T(ref a, ref b) => {
+                let mut tv = serializer.serialize_tuple_variant("E", 0, "T", 2)?;
+                tv.serialize_field(a)?;
+                tv.serialize_field(b)?;
+                tv.end()
+            }
+            E::U(ref a, ref b, ref c) => {
+                let mut tv = serializer.serialize_tuple_variant("E", 1, "U", 3)?;
+                tv.serialize_field(a)?;
+                tv.serialize_field(b)?;
+                tv.serialize_field(c)?;
+                tv.end()
+            }
+        }
+    }
+}
+```
+
+The call to `serialize_tuple_variant` takes the enum name, the variant's index within the enum, the variant name, and the number of fields. The index lets binary formats encode variants compactly without storing the name.
+
+---
+
+## SerializeMap
+
+Returned from `Serializer::serialize_map`. Represents a heterogeneous key-value mapping such as `BTreeMap<K, V>`. Keys and values are serialized with separate calls, or together using the convenience method `serialize_entry`.
+
+### Trait definition
+
+```rust
+pub trait SerializeMap {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a map key.
+    fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Serialize a map value.
+    ///
+    /// # Panics
+    ///
+    /// Calling `serialize_value` before `serialize_key` is incorrect and is
+    /// allowed to panic or produce bogus results.
+    fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Serialize a map entry consisting of a key and a value.
+    ///
+    /// The default implementation delegates to `serialize_key` and
+    /// `serialize_value`.
+    fn serialize_entry<K, V>(&mut self, key: &K, value: &V) -> Result<(), Self::Error>
+    where
+        K: ?Sized + Serialize,
+        V: ?Sized + Serialize,
+    {
+        self.serialize_key(key)?;
+        self.serialize_value(value)
+    }
+
+    /// Finish serializing a map.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeMap, Serializer};
+
+impl<K, V> Serialize for HashMap<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (k, v) in self {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+```
+
+<Warning>
+Always call `serialize_key` before `serialize_value`. Calling `serialize_value` first is incorrect and may panic or produce garbage output depending on the serializer implementation.
+</Warning>
+
+`serialize_entry` is a default method backed by `serialize_key` + `serialize_value`. Serializer authors can override it with a more efficient implementation when both the key and value are available simultaneously — some formats can write a key-value pair more compactly than two separate writes.
+
+---
+
+## SerializeStruct
+
+Returned from `Serializer::serialize_struct`. Represents a struct with named fields such as `struct Rgb { r: u8, g: u8, b: u8 }`. Each field is identified by a `&'static str` key.
+
+### Trait definition
+
+```rust
+pub trait SerializeStruct {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a struct field.
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Indicate that a struct field has been skipped.
+    ///
+    /// The default implementation does nothing.
+    #[inline]
+    fn skip_field(&mut self, key: &'static str) -> Result<(), Self::Error> {
+        let _ = key;
+        Ok(())
+    }
+
+    /// Finish serializing a struct.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+struct Rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl Serialize for Rgb {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut rgb = serializer.serialize_struct("Rgb", 3)?;
+        rgb.serialize_field("r", &self.r)?;
+        rgb.serialize_field("g", &self.g)?;
+        rgb.serialize_field("b", &self.b)?;
+        rgb.end()
+    }
+}
+```
+
+The `len` argument to `serialize_struct` is the number of fields that will actually be serialized. It does **not** include fields that will be skipped with `skip_field`. Serializer implementations may use this count to pre-allocate output buffers or to write a length prefix.
+
+`skip_field` is used by `#[derive(Serialize)]` when a field is annotated with `#[serde(skip_serializing_if = "…")]` and the condition holds at runtime. The default implementation is a no-op; serializers that need to track field counts can override it.
+
+---
+
+## SerializeStructVariant
+
+Returned from `Serializer::serialize_struct_variant`. Represents a struct-style enum variant such as `E::S` in `enum E { S { r: u8, g: u8, b: u8 } }`.
+
+### Trait definition
+
+```rust
+pub trait SerializeStructVariant {
+    type Ok;
+    type Error: Error;
+
+    /// Serialize a struct variant field.
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    /// Indicate that a struct variant field has been skipped.
+    ///
+    /// The default implementation does nothing.
+    #[inline]
+    fn skip_field(&mut self, key: &'static str) -> Result<(), Self::Error> {
+        let _ = key;
+        Ok(())
+    }
+
+    /// Finish serializing a struct variant.
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+### Usage example
+
+```rust
+use serde::ser::{Serialize, SerializeStructVariant, Serializer};
+
+enum E {
+    S { r: u8, g: u8, b: u8 },
+}
+
+impl Serialize for E {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match *self {
+            E::S { ref r, ref g, ref b } => {
+                let mut sv = serializer.serialize_struct_variant("E", 0, "S", 3)?;
+                sv.serialize_field("r", r)?;
+                sv.serialize_field("g", g)?;
+                sv.serialize_field("b", b)?;
+                sv.end()
+            }
+        }
+    }
+}
+```
+
+Like `SerializeStruct`, `SerializeStructVariant` provides `skip_field` with a default no-op implementation. The variant index and name arguments passed to `serialize_struct_variant` serve the same purpose as in `serialize_tuple_variant`: they let binary formats encode variant identity efficiently.
+
+---
+
+## Summary table
+
+| Trait | Returned from | Field method | Has `skip_field`? |
+|---|---|---|---|
+| `SerializeSeq` | `serialize_seq` | `serialize_element` | No |
+| `SerializeTuple` | `serialize_tuple` | `serialize_element` | No |
+| `SerializeTupleStruct` | `serialize_tuple_struct` | `serialize_field` | No |
+| `SerializeTupleVariant` | `serialize_tuple_variant` | `serialize_field` | No |
+| `SerializeMap` | `serialize_map` | `serialize_key` / `serialize_value` / `serialize_entry` | No |
+| `SerializeStruct` | `serialize_struct` | `serialize_field` | Yes (default no-op) |
+| `SerializeStructVariant` | `serialize_struct_variant` | `serialize_field` | Yes (default no-op) |

@@ -1,0 +1,212 @@
+---
+title: "Custom Serialization with serde(with) and Modules"
+sidebarTitle: "Custom Serialization"
+description: "Use #[serde(with)], serialize_with, and deserialize_with to override how individual fields are serialized without changing the underlying type."
+---
+
+Sometimes the default serialization that Serde derives for a type does not match the wire format you need. A `Duration` might need to be represented as a floating-point number of seconds, a timestamp as an ISO 8601 string, or a set of bit flags as an integer. Rather than wrapping every field in a newtype or writing a full `Serialize` implementation for the whole struct, Serde gives you three targeted approaches for overriding the serialization of individual fields. These attributes are processed by `serde_derive` and require the `derive` feature or the `serde_derive` crate.
+
+## Approach 1: `serialize_with` and `deserialize_with`
+
+The most direct approach: point a single field at a function that handles its serialization or deserialization. The function must match a specific signature so that Serde can call it generically.
+
+```rust
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+fn serialize_duration_secs<S>(d: &Duration, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_f64(d.as_secs_f64())
+}
+
+fn deserialize_duration_secs<'de, D>(d: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let secs = f64::deserialize(d)?;
+    Ok(Duration::from_secs_f64(secs))
+}
+
+#[derive(Serialize, Deserialize)]
+struct Timeout {
+    #[serde(
+        serialize_with = "serialize_duration_secs",
+        deserialize_with = "deserialize_duration_secs"
+    )]
+    duration: Duration,
+}
+```
+
+<Note>
+  When you use `serialize_with` or `deserialize_with` independently (not
+  together as a pair), Serde requires that the field type still implements the
+  other half of the trait. Use `#[serde(with = "...")]` when you want to
+  replace both directions at once — it is generally the cleaner option.
+</Note>
+
+## Approach 2: `#[serde(with = "module")]`
+
+The `with` attribute delegates both serialization and deserialization to a module. The module must expose two public functions named `serialize` and `deserialize` with the correct signatures. This is the idiomatic pattern for reusable field adapters.
+
+```rust
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// A reusable module that represents Duration as floating-point seconds.
+mod duration_secs {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(duration.as_secs_f64())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = f64::deserialize(deserializer)?;
+        Ok(Duration::from_secs_f64(secs))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Job {
+    name: String,
+    #[serde(with = "duration_secs")]
+    timeout: Duration,
+    #[serde(with = "duration_secs")]
+    retry_delay: Duration,
+}
+```
+
+The module can be at any path — `#[serde(with = "crate::codecs::duration_secs")]` works just as well as a local module. This makes `with` modules an excellent candidate for putting in a shared utilities module used across many structs.
+
+## Approach 3: The `with` Module Pattern for Dates
+
+A common real-world use case is serializing dates and times as ISO 8601 strings. Here is a self-contained `with` module that handles a `chrono::NaiveDate` as a `"YYYY-MM-DD"` string (the same pattern works for any type that can be parsed from and formatted to a string):
+
+```rust
+mod iso8601_date {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const FORMAT: &str = "%Y-%m-%d";
+
+    pub fn serialize<S>(date: &chrono::NaiveDate, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = date.format(FORMAT).to_string();
+        serializer.serialize_str(&s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<chrono::NaiveDate, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        chrono::NaiveDate::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)
+    }
+}
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Event {
+    title: String,
+    #[serde(with = "iso8601_date")]
+    date: chrono::NaiveDate,
+}
+```
+
+## Approach 4: Newtype Wrapper
+
+When you need full control over how a type is serialized everywhere it appears — not just on individual fields — wrap it in a newtype and implement `Serialize`/`Deserialize` on the wrapper:
+
+```rust
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::time::Duration;
+
+struct DurationAsSeconds(Duration);
+
+impl Serialize for DurationAsSeconds {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.0.as_secs_f64())
+    }
+}
+
+impl<'de> Deserialize<'de> for DurationAsSeconds {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let secs = f64::deserialize(deserializer)?;
+        Ok(DurationAsSeconds(Duration::from_secs_f64(secs)))
+    }
+}
+```
+
+## Skipping Optional Fields
+
+A frequent companion pattern to custom serialization is omitting `None` fields from the output entirely rather than writing `null`. The `skip_serializing_if` attribute accepts any function path that takes `&T` and returns `bool`:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct UserProfile {
+    username: String,
+
+    // Omit from JSON output when None; deserialize as None when missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bio: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+
+    // Skip serializing empty vecs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+}
+```
+
+With this configuration, `UserProfile { username: "alice".into(), bio: None, avatar_url: None, tags: vec![] }` serializes to `{"username":"alice"}`.
+
+## Combining Attributes
+
+Attributes can be combined freely on a single field:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(
+        with = "duration_secs",
+        skip_serializing_if = "is_zero_duration",
+        default = "default_timeout"
+    )]
+    timeout: std::time::Duration,
+}
+
+fn is_zero_duration(d: &std::time::Duration) -> bool {
+    d.is_zero()
+}
+
+fn default_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(30)
+}
+```
+
+<Tip>
+  The [`serde_with`](https://docs.rs/serde_with) crate provides a large library
+  of ready-made `with` modules for common conversions: base64-encoded bytes,
+  timestamps as integers, maps serialized as sequences of key-value pairs,
+  `Display`/`FromStr` adapters, and many more. Before writing your own `with`
+  module, check whether `serde_with` already covers your case.
+</Tip>
+
+For a complete list of all available `#[serde(...)]` field, variant, and container attributes, see the [Attributes reference](/attributes).

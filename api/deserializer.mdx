@@ -1,0 +1,304 @@
+---
+title: "Deserializer Trait — Serde API Reference"
+sidebarTitle: "Deserializer"
+description: "The Deserializer trait is implemented by data format crates such as serde_json and postcard to parse input and drive Visitor implementations for each Serde data model type."
+---
+
+The `Deserializer` trait is the input half of Serde's data model. Where `Deserialize` is implemented by **data structures** that know how to construct themselves from a sequence of `Visitor` callbacks, `Deserializer` is implemented by **data formats** that know how to parse their wire representation and call the right `Visitor` methods. Most application code never implements `Deserializer` directly — that work is done by format crates like `serde_json`, `serde_yaml`, and `postcard`. You interact with this trait indirectly whenever you call a format's top-level `from_str`, `from_slice`, or `from_reader` function, which constructs a concrete `Deserializer` and passes it to your type's `Deserialize::deserialize` method.
+
+## Trait definition (condensed)
+
+```rust
+pub trait Deserializer<'de>: Sized {
+    type Error: Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>;
+
+    // ... one method per Serde data model type
+}
+```
+
+The `'de` lifetime is the lifetime of data that may be borrowed from the input by deserialized values. For example, a `Deserializer<'de>` backed by a `&'de str` can produce `&'de str` values without copying.
+
+## Associated type
+
+<ResponseField name="Error" type="type: Error">
+  The error type returned when deserialization fails. Must implement
+  `serde::de::Error`, which provides constructors such as `custom(msg)`,
+  `invalid_type`, `invalid_value`, `invalid_length`, `unknown_variant`,
+  `unknown_field`, `missing_field`, and `duplicate_field`. Format-specific
+  errors (e.g., an invalid JSON escape sequence) are also expressed through
+  this type.
+</ResponseField>
+
+## Two entry-point styles
+
+The `Deserializer` trait supports two complementary approaches, and understanding the difference is important when implementing `Deserialize` manually.
+
+**1. `deserialize_any` — for self-describing formats**
+
+Self-describing formats like JSON embed enough type information in the wire representation that the deserializer can determine the Serde type on its own. A JSON deserializer seeing `{` knows it is looking at a map; one seeing `42` knows it is looking at an integer. Calling `deserialize_any` tells the deserializer to inspect the input and call whichever `Visitor` method matches what it finds.
+
+**2. `deserialize_*` hint methods — for non-self-describing formats**
+
+Compact binary formats like Postcard store only values, not type tags. To decode an integer from such a format, the deserializer must be told "the next bytes are an `i64`". The `deserialize_*` methods provide that hint. Non-self-describing formats cannot implement `deserialize_any` in a meaningful way and will typically return an error if it is called.
+
+<Warning>
+  Implementing `Deserialize` in a way that calls `deserialize_any` restricts
+  your type to self-describing formats only. Types like `serde_json::Value`
+  must do this because they accept any shape of data, but most domain types
+  should use the appropriate typed hint method instead.
+</Warning>
+
+## Methods
+
+### `deserialize_any`
+
+```rust
+fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where
+    V: Visitor<'de>;
+```
+
+Instructs the deserializer to determine the type from the input itself and call the matching `Visitor` method. Use this only when the `Deserialize` implementation genuinely needs to accept any input shape.
+
+### Primitive hint methods
+
+```rust
+fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_i8<V>(self, visitor: V)  -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+// Default returns an error; override to support i128.
+fn deserialize_i128<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_u8<V>(self, visitor: V)  -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+// Default returns an error; override to support u128.
+fn deserialize_u128<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+`deserialize_i128` and `deserialize_u128` have default implementations that return an error. Format implementors should override these if the format can represent 128-bit integers.
+
+### String and byte hint methods
+
+```rust
+// Hint: the type wants a &str but does not need to own the data.
+fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+// Hint: the type wants a String and would benefit from owned data.
+fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+// Hint: the type wants a &[u8] but does not need to own the data.
+fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+// Hint: the type wants a Vec<u8> and would benefit from owned data.
+fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+The `str` / `string` pair and the `bytes` / `byte_buf` pair exist for the same reason: a `Visitor` that would benefit from owning the data signals that with the `_string` / `_byte_buf` variant, giving the deserializer the opportunity to hand over a buffer it already owns rather than copying it. Deserializers that cannot distinguish between the two (for example, those backed by a borrowed slice) may handle both variants the same way.
+
+### Option and unit hint methods
+
+```rust
+fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_unit_struct<V>(
+    self,
+    name: &'static str,
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_newtype_struct<V>(
+    self,
+    name: &'static str,
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+`deserialize_option` allows deserializers that encode optional values as nullable values (e.g., JSON `null`) to convert `null` into `Visitor::visit_none` and any other value into `Visitor::visit_some`. `deserialize_unit_struct` and `deserialize_newtype_struct` carry the struct name so that formats can use it as a discriminator if needed, but most formats ignore the name and forward to the simpler `unit` / `newtype` visitor calls.
+
+### Sequence and tuple hint methods
+
+```rust
+fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_tuple<V>(
+    self,
+    len: usize,
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_tuple_struct<V>(
+    self,
+    name: &'static str,
+    len: usize,
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+`deserialize_seq` is used for variably sized sequences like `Vec<T>`. `deserialize_tuple` provides the length upfront, enabling non-self-describing formats to read exactly the right number of elements without a length prefix in the data. `deserialize_tuple_struct` additionally provides the struct name.
+
+### Map and struct hint methods
+
+```rust
+fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_struct<V>(
+    self,
+    name: &'static str,
+    fields: &'static [&'static str],
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+`deserialize_map` is for heterogeneous key-value pairs like `HashMap`. `deserialize_struct` additionally provides the struct name and the list of known field names; some formats use the field list to skip unknown fields efficiently.
+
+### Enum hint method
+
+```rust
+fn deserialize_enum<V>(
+    self,
+    name: &'static str,
+    variants: &'static [&'static str],
+    visitor: V,
+) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+The `name` is the enum name and `variants` is a static list of all known variant names. The deserializer passes an `EnumAccess` to `Visitor::visit_enum`, which is then used to identify the variant and deserialize its content.
+
+### Identifier and ignored-any hint methods
+
+```rust
+fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+
+fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where V: Visitor<'de>;
+```
+
+`deserialize_identifier` is used to decode the name of a struct field or the discriminant of an enum variant. Many formats treat identifiers as strings. `deserialize_ignored_any` is the hint that the value about to be read will be discarded; formats that support it can skip the bytes cheaply without fully parsing them. Non-self-describing formats may not support `deserialize_ignored_any` and should return an error.
+
+### `is_human_readable`
+
+```rust
+fn is_human_readable(&self) -> bool {
+    true // default
+}
+```
+
+Mirrors the same method on `Serializer`. `Deserialize` implementations can query this to decide whether to expect a human-readable form (e.g., a timestamp string like `"2015-05-15T17:01:00Z"`) or a compact binary form (e.g., a `u64` seconds count). The default is `true`; binary format implementors override it to `false`.
+
+```rust
+use serde::de::{self, Deserialize, Deserializer};
+
+impl<'de> Deserialize<'de> for Timestamp {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            // Expect "2015-05-15T17:01:00Z"
+            let s = String::deserialize(deserializer)?;
+            Timestamp::from_str(&s).map_err(de::Error::custom)
+        } else {
+            // Expect a compact u64 seconds-since-epoch
+            let n = u64::deserialize(deserializer)?;
+            Ok(Timestamp::EPOCH + Duration::seconds(n))
+        }
+    }
+}
+```
+
+## The `forward_to_deserialize_any!` macro
+
+For self-describing formats, implementing each of the ~20 `deserialize_*` hint methods to simply call `deserialize_any` would be tedious boilerplate. The `forward_to_deserialize_any!` macro eliminates this:
+
+```rust
+use serde::forward_to_deserialize_any;
+
+impl<'de> Deserializer<'de> for MyDeserializer {
+    type Error = MyError;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        // Inspect the input and dispatch to the right visitor method.
+        match self.peek_type() {
+            Token::Bool(b)    => visitor.visit_bool(b),
+            Token::Int(i)     => visitor.visit_i64(i),
+            Token::Str(s)     => visitor.visit_str(s),
+            Token::Null       => visitor.visit_unit(),
+            Token::OpenBrace  => self.deserialize_map(visitor),
+            Token::OpenBracket => self.deserialize_seq(visitor),
+            // ...
+        }
+    }
+
+    // Generate forwarding impls for all other methods.
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
+    }
+}
+```
+
+The macro accepts a space-separated list of the method suffixes to forward and generates a correct `fn deserialize_X` body for each one that calls `self.deserialize_any(visitor)`. It is appropriate only for truly self-describing formats; compact binary format implementations must handle each method individually.
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Deserializer Visitor" href="/api/de-visitor">
+    Reference for the `Visitor` trait, the callback interface that
+    `Deserializer` implementations call to hand deserialized values back to
+    `Deserialize` implementations.
+  </Card>
+  <Card title="Implementing a data format" href="/impl-data-format">
+    End-to-end guide to writing a `Deserializer` (and `Serializer`) for a
+    custom data format, including the example JSON implementation from the Serde
+    website.
+  </Card>
+</CardGroup>

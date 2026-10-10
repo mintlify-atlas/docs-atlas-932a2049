@@ -1,47 +1,140 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Serde in Rust"
+sidebarTitle: "Quickstart"
+description: "Add Serde to a Rust project, derive Serialize and Deserialize on a struct, and round-trip data through JSON in under five minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+Serde integrates into a Rust project through two pieces: the `serde` crate, which provides the core traits, and a format crate such as `serde_json`, which handles the actual encoding and decoding. This guide walks through the minimal setup needed to serialize a struct to a JSON string and deserialize it back again.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  Serde requires **Rust 1.56** or later. The `serde_derive` crate, which powers `#[derive(Serialize, Deserialize)]`, requires **Rust 1.71** or later. Run `rustup update stable` if you are on an older toolchain.
+</Note>
 
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Add Serde and serde_json to Cargo.toml">
+    Open your project's `Cargo.toml` and add the following dependencies. The `derive` feature enables the `#[derive(Serialize, Deserialize)]` macro — without it, you must write trait implementations by hand.
 
-    ```bash
-    npm install your-package
+    <CodeGroup>
+    ```toml With derive (recommended)
+    [dependencies]
+    # Core traits plus the derive macro for structs and enums.
+    serde = { version = "1.0", features = ["derive"] }
+
+    # Each data format lives in its own crate. This example uses JSON.
+    serde_json = "1.0"
+    ```
+
+    ```toml Without derive
+    [dependencies]
+    # Core traits only — no procedural macro.
+    serde = "1.0"
+
+    # JSON format crate.
+    serde_json = "1.0"
+    ```
+    </CodeGroup>
+
+    <Tip>
+      The `derive` feature is a thin re-export of the `serde_derive` crate. Enabling it adds the `#[derive(Serialize, Deserialize)]` attribute to your toolbox without changing any of the runtime behavior or binary size of your application.
+    </Tip>
+  </Step>
+
+  <Step title="Derive Serialize and Deserialize on a struct">
+    Import the traits and place the derive attribute on your type. Serde inspects the struct's fields at compile time and generates the appropriate implementation — no runtime reflection is involved.
+
+    ```rust
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    ```
+
+    The same attribute works on enums, tuple structs, and newtype wrappers. Behavior can be further customized with `#[serde(...)]` field and container attributes.
+  </Step>
+
+  <Step title="Serialize a value to a JSON string">
+    `serde_json::to_string` borrows a reference to any value that implements `Serialize` and returns a `Result<String, serde_json::Error>`. For quick prototyping, `.unwrap()` is fine; in production code, propagate the error with `?`.
+
+    ```rust
+    fn main() {
+        let point = Point { x: 1, y: 2 };
+
+        // Serialize the Point to a JSON string.
+        let serialized = serde_json::to_string(&point).unwrap();
+
+        // Prints: serialized = {"x":1,"y":2}
+        println!("serialized = {}", serialized);
+    }
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+  <Step title="Deserialize a JSON string back to a struct">
+    `serde_json::from_str` takes a `&str` and a type annotation — either an explicit turbofish or a type ascription on the binding — and returns a `Result<T, serde_json::Error>`.
 
-    ```bash
-    your-cli start
+    ```rust
+    fn main() {
+        let point = Point { x: 1, y: 2 };
+
+        let serialized = serde_json::to_string(&point).unwrap();
+        println!("serialized = {}", serialized);
+
+        // Deserialize the JSON string back into a Point.
+        let deserialized: Point = serde_json::from_str(&serialized).unwrap();
+
+        // Prints: deserialized = Point { x: 1, y: 2 }
+        println!("deserialized = {:?}", deserialized);
+    }
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Complete working example
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+The following is the full program combining all four steps above. You can run it directly in the [Rust Playground](https://play.rust-lang.org/?edition=2021&gist=72755f28f99afc95e01d63174b28c1f5) after adding the dependencies to `Cargo.toml`.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    let point = Point { x: 1, y: 2 };
+
+    // Convert the Point to a JSON string.
+    let serialized = serde_json::to_string(&point).unwrap();
+
+    // Prints serialized = {"x":1,"y":2}
+    println!("serialized = {}", serialized);
+
+    // Convert the JSON string back to a Point.
+    let deserialized: Point = serde_json::from_str(&serialized).unwrap();
+
+    // Prints deserialized = Point { x: 1, y: 2 }
+    println!("deserialized = {:?}", deserialized);
+}
+```
+
+## Using other formats
+
+Every Serde format crate follows the same pattern: swap out the format crate's `to_string` / `from_str` (or equivalent) call, and your struct requires no changes at all. The `Serialize` and `Deserialize` implementations on `Point` above work identically with YAML, TOML, MessagePack, and any other format in the ecosystem.
+
+```rust
+// YAML — same struct, different crate.
+let yaml = serde_yaml::to_string(&point).unwrap();
+let from_yaml: Point = serde_yaml::from_str(&yaml).unwrap();
+
+// TOML — note: TOML requires a top-level table, so structs serialize naturally.
+let toml_str = toml::to_string(&point).unwrap();
+let from_toml: Point = toml::from_str(&toml_str).unwrap();
+```
+
+See [Data Formats](/data-formats) for a full list of available format crates.

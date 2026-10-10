@@ -1,0 +1,230 @@
+---
+title: "Deserialize Trait — Serde API Reference"
+sidebarTitle: "Deserialize"
+description: "The Deserialize trait marks Rust types that can be constructed from any data format supported by Serde, with lifetime-aware support for zero-copy borrowed data."
+---
+
+The `Deserialize` trait is the entry point for the deserialization half of Serde's data model. Any type that implements `Deserialize<'de>` can be constructed from any data format that has a corresponding `Deserializer` implementation — JSON, YAML, Postcard, TOML, and many others — without knowing anything about the source format. The `'de` lifetime parameter is what makes zero-copy deserialization possible: it ties the lifetime of data that `Self` may borrow directly to the lifetime of the input bytes, avoiding allocation for string slices and byte slices when the input lives long enough.
+
+## Trait definition
+
+```rust
+pub trait Deserialize<'de>: Sized {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>;
+
+    fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+    where
+        D: Deserializer<'de>;
+}
+```
+
+`deserialize` is the primary method: it takes a `Deserializer` and returns `Result<Self, D::Error>`. The `deserialize_in_place` method is a performance optimization that deserializes a value into an existing allocation rather than constructing a fresh one; its default implementation simply delegates to `deserialize`. You should not need to override `deserialize_in_place` in typical implementations.
+
+## The `'de` lifetime
+
+The `'de` lifetime is the lifetime of data that may be **borrowed** by `Self` during deserialization. It is threaded through the trait so that types like `&'de str` and `&'de [u8]` can be returned by `deserialize` without copying the underlying bytes out of the input.
+
+```rust
+// &'de str borrows directly from the deserializer's input buffer.
+// No allocation occurs for the string data.
+#[derive(Deserialize)]
+struct Config<'de> {
+    name: &'de str,
+    value: u64,
+}
+```
+
+When you do not need to borrow from the input — the common case — use `String` and `Vec<u8>` instead of `&str` and `&[u8]`, and let the `'de` lifetime be handled automatically by the derive macro. For a thorough explanation of how `'de` interacts with ownership, see the [Understanding Deserializer Lifetimes](https://serde.rs/lifetimes.html) page on the Serde website.
+
+<Note>
+  The `DeserializeOwned` convenience alias is defined as
+  `for<'de> Deserialize<'de>` and is useful for trait bounds where the
+  deserialized value must not borrow from any particular input lifetime —
+  for example, the return type of a `from_reader` function.
+</Note>
+
+## When to implement
+
+You need to implement `Deserialize` when:
+
+- You have a type not covered by the built-in implementations listed below.
+- You need custom validation during deserialization (for example, range-checking an integer).
+- You are wrapping a type from another crate that does not ship Serde support.
+
+In the vast majority of cases, `#[derive(Deserialize)]` is the right approach. Manual implementation is only necessary when the derive output is incorrect or insufficient.
+
+## Standard library types with built-in implementations
+
+The set of types with built-in `Deserialize` support is slightly different from the `Serialize` set. Some types can be serialized but not deserialized — for example, `OsStr` (a borrowed OS string) cannot be deserialized because there is no way to produce a borrowed `OsStr` from arbitrary input without owning storage.
+
+<CardGroup cols={2}>
+  <Card title="Primitive types">
+    - `bool`
+    - `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
+    - `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
+    - `f32`, `f64`
+    - `char`
+  </Card>
+  <Card title="Compound types">
+    - `[T; 0]` through `[T; 32]` (fixed-size arrays)
+    - Tuples up to size 16
+  </Card>
+  <Card title="Common standard library types">
+    - `String`
+    - `Option<T>`
+    - `Result<T, E>`
+    - `PhantomData<T>`
+  </Card>
+  <Card title="Wrapper types">
+    - `Box<T>`
+    - `Box<[T]>`
+    - `Box<str>`
+    - `Cow<'a, T>`
+    - `Cell<T>`
+    - `RefCell<T>`
+    - `Mutex<T>`
+    - `RwLock<T>`
+    - `Rc<T>` *(requires `features = ["rc"]`)*
+    - `Arc<T>` *(requires `features = ["rc"]`)*
+  </Card>
+  <Card title="Collection types">
+    - `BTreeMap<K, V>`
+    - `BTreeSet<T>`
+    - `BinaryHeap<T>`
+    - `HashMap<K, V, H>`
+    - `HashSet<T, H>`
+    - `LinkedList<T>`
+    - `VecDeque<T>`
+    - `Vec<T>`
+  </Card>
+  <Card title="Zero-copy types">
+    - `&str` *(borrows from input)*
+    - `&[u8]` *(borrows from input)*
+  </Card>
+  <Card title="FFI types">
+    - `CString`
+    - `Box<CStr>`
+    - `OsString`
+  </Card>
+  <Card title="Miscellaneous standard library types">
+    - `Duration`
+    - `SystemTime`
+    - `Path`
+    - `PathBuf`
+    - `Range<T>`
+    - `RangeInclusive<T>`
+    - `Bound<T>`
+    - `num::NonZero*`
+    - `!` *(unstable)*
+  </Card>
+  <Card title="Net types">
+    - `IpAddr`
+    - `Ipv4Addr`
+    - `Ipv6Addr`
+    - `SocketAddr`
+    - `SocketAddrV4`
+    - `SocketAddrV6`
+  </Card>
+</CardGroup>
+
+## Using the derive macro
+
+For structs and enums defined in your own code, `#[derive(Deserialize)]` generates a complete `Deserialize` implementation automatically. Add `serde` to `Cargo.toml` with the `derive` feature:
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+Annotate your type and use it with any deserializer:
+
+```rust
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ServerConfig {
+    host: String,
+    port: u16,
+    tls: bool,
+}
+
+fn main() {
+    let json = r#"{"host":"localhost","port":8080,"tls":false}"#;
+    let config: ServerConfig = serde_json::from_str(json).unwrap();
+    println!("{}:{}", config.host, config.port);
+}
+```
+
+The generated implementation drives a `Visitor` that knows the expected field names and types. Derive attributes such as `#[serde(rename = "...")]`, `#[serde(default)]`, `#[serde(alias = "...")]`, and `#[serde(deny_unknown_fields)]` let you fine-tune the behavior without hand-writing any deserialization logic.
+
+<Tip>
+  When a field should have a default value when absent from the input, use
+  `#[serde(default)]` on the field or `#[serde(default = "path")]` to call a
+  custom function for the default.
+</Tip>
+
+## Manual implementation example
+
+When the derive macro is not sufficient — for example, when you need to validate the deserialized value — implement the trait directly using a `Visitor`:
+
+```rust
+use serde::de::{self, Deserialize, Deserializer, Visitor};
+use std::fmt;
+
+/// A port number that must be in the range 1..=65535.
+struct Port(u16);
+
+struct PortVisitor;
+
+impl<'de> Visitor<'de> for PortVisitor {
+    type Value = Port;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a port number between 1 and 65535")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value >= 1 && value <= 65535 {
+            Ok(Port(value as u16))
+        } else {
+            Err(E::custom(format!("port out of range: {}", value)))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Port {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_u64(PortVisitor)
+    }
+}
+```
+
+The `Visitor` pattern separates the type hint given to the deserializer (`deserialize_u64`) from the actual value-matching logic in the `Visitor` methods. The deserializer calls whichever `visit_*` method matches the data it finds in the input.
+
+<Warning>
+  Avoid relying on `Deserializer::deserialize_any` unless your type genuinely
+  needs to accept multiple possible shapes from the input. Using `deserialize_any`
+  restricts your type to self-describing formats like JSON and rules out compact
+  binary formats like Postcard.
+</Warning>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="Implementing Deserialize" href="/impl-deserialize">
+    Step-by-step walkthrough of manual `Deserialize` implementations for a
+    variety of type shapes, including enums, newtypes, and custom containers.
+  </Card>
+  <Card title="Derive macro" href="/derive">
+    Complete reference for the `#[derive(Deserialize)]` macro and all supported
+    `#[serde(...)]` field and container attributes.
+  </Card>
+</CardGroup>

@@ -1,0 +1,311 @@
+---
+title: "Implement Serialize for Custom Rust Types"
+sidebarTitle: "Impl Serialize"
+description: "Learn how to manually implement Serde's Serialize trait for types you can't derive on, including structs, maps, sequences, and enum variants."
+---
+
+Serde's derive macro handles the vast majority of serialization use cases, but there are situations where you must write a `Serialize` implementation by hand: types defined in external crates where you cannot add attributes, types with invariants that require custom serialization logic, or data structures that map onto the Serde data model in a non-trivial way. In all of these cases, implementing `Serialize` directly gives you full control over how your type is expressed to any downstream data format.
+
+## The Serialize Trait
+
+Every type that can be serialized implements this single-method trait:
+
+```rust
+pub trait Serialize {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer;
+}
+```
+
+The `serializer` parameter is provided by the data format (e.g., `serde_json`, `postcard`). Your job is to call exactly one method on it that matches how your type fits into the [Serde data model](https://serde.rs/data-model.html). The return type `S::Ok` is whatever the format produces on success, and `S::Error` is its error type — you never construct these types directly.
+
+<Note>
+  For most structs and enums defined in your own crate, `#[derive(Serialize)]` from the `serde` crate generates a correct and efficient implementation automatically. Reach for a manual `impl` only when derivation is unavailable or insufficient.
+</Note>
+
+## Serializing Primitives and Newtypes
+
+For primitive values, call the corresponding method on the serializer directly. For a newtype struct that wraps another serializable value, use `serialize_newtype_struct`:
+
+```rust
+use serde::ser::{Serialize, Serializer};
+
+// Serializing a plain string wrapper
+struct Label(String);
+
+impl Serialize for Label {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+// Serializing a newtype struct (lets formats treat it as a transparent wrapper)
+struct Millimeters(u8);
+
+impl Serialize for Millimeters {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_newtype_struct("Millimeters", &self.0)
+    }
+}
+```
+
+The full set of primitive serializer methods mirrors the Serde data model: `serialize_bool`, `serialize_i8` through `serialize_i128`, `serialize_u8` through `serialize_u128`, `serialize_f32`, `serialize_f64`, `serialize_char`, `serialize_str`, `serialize_bytes`, `serialize_none`, `serialize_some`, `serialize_unit`, `serialize_unit_struct`, and `serialize_newtype_struct`.
+
+## Serializing a Struct
+
+Use `serialize_struct` to begin a named key–value record. Pass the struct name and the **exact number of fields that will be serialized** (fields skipped with `skip_field` do not count toward this total). Call `serialize_field` for each field, then close with `end`.
+
+```rust
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+struct Person {
+    name: String,
+    age: u8,
+    phones: Vec<String>,
+}
+
+impl Serialize for Person {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut s = serializer.serialize_struct("Person", 3)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("age", &self.age)?;
+        s.serialize_field("phones", &self.phones)?;
+        s.end()
+    }
+}
+```
+
+`SerializeStruct::serialize_field` takes a `&'static str` key and a reference to any `Serialize` value. The `end` call consumes the builder and returns `Result<S::Ok, S::Error>`.
+
+## Serializing a Map
+
+Use `serialize_map` when the keys are not statically known at compile time. Pass `Some(len)` if you know the element count ahead of iteration, or `None` otherwise. Then call `serialize_entry` (or separate `serialize_key` / `serialize_value` calls) for each pair.
+
+```rust
+use serde::ser::{Serialize, SerializeMap, Serializer};
+use std::collections::HashMap;
+
+struct TagMap(HashMap<String, String>);
+
+impl Serialize for TagMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (k, v) in &self.0 {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+```
+
+<Tip>
+  `serialize_entry(key, value)` is preferred over separate `serialize_key` / `serialize_value` calls; some formats can implement it more efficiently when both are available at once.
+</Tip>
+
+## Serializing a Sequence
+
+Use `serialize_seq` for variable-length collections. Provide the element count as `Some(len)` when known — some formats require it — or `None` when iterating a lazy source.
+
+```rust
+use serde::ser::{Serialize, SerializeSeq, Serializer};
+
+struct Scores(Vec<u32>);
+
+impl Serialize for Scores {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for score in &self.0 {
+            seq.serialize_element(score)?;
+        }
+        seq.end()
+    }
+}
+```
+
+For statically-sized sequences whose length is known without reading serialized data (like fixed-size arrays or tuples), use `serialize_tuple` instead.
+
+## Serializing Enum Variants
+
+Enums map to four different variant kinds in the Serde data model. Each requires a slightly different serializer call.
+
+<Steps>
+  <Step title="Unit variant — E::A in enum E { A, B }">
+    ```rust
+    use serde::ser::{Serialize, Serializer};
+
+    enum Direction {
+        North,
+        South,
+        East,
+        West,
+    }
+
+    impl Serialize for Direction {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match *self {
+                Direction::North => serializer.serialize_unit_variant("Direction", 0, "North"),
+                Direction::South => serializer.serialize_unit_variant("Direction", 1, "South"),
+                Direction::East  => serializer.serialize_unit_variant("Direction", 2, "East"),
+                Direction::West  => serializer.serialize_unit_variant("Direction", 3, "West"),
+            }
+        }
+    }
+    ```
+    The three arguments are: enum name, zero-based variant index, variant name.
+  </Step>
+  <Step title="Newtype variant — E::N(u8)">
+    ```rust
+    use serde::ser::{Serialize, Serializer};
+
+    enum Payload {
+        Integer(i64),
+        Text(String),
+    }
+
+    impl Serialize for Payload {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match *self {
+                Payload::Integer(ref n) =>
+                    serializer.serialize_newtype_variant("Payload", 0, "Integer", n),
+                Payload::Text(ref s) =>
+                    serializer.serialize_newtype_variant("Payload", 1, "Text", s),
+            }
+        }
+    }
+    ```
+  </Step>
+  <Step title="Tuple variant — E::T(u8, u8)">
+    ```rust
+    use serde::ser::{Serialize, SerializeTupleVariant, Serializer};
+
+    enum Color {
+        Rgb(u8, u8, u8),
+    }
+
+    impl Serialize for Color {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match *self {
+                Color::Rgb(ref r, ref g, ref b) => {
+                    let mut tv =
+                        serializer.serialize_tuple_variant("Color", 0, "Rgb", 3)?;
+                    tv.serialize_field(r)?;
+                    tv.serialize_field(g)?;
+                    tv.serialize_field(b)?;
+                    tv.end()
+                }
+            }
+        }
+    }
+    ```
+  </Step>
+  <Step title="Struct variant — E::S { field: T }">
+    ```rust
+    use serde::ser::{Serialize, SerializeStructVariant, Serializer};
+
+    enum Shape {
+        Circle { radius: f64 },
+    }
+
+    impl Serialize for Shape {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match *self {
+                Shape::Circle { ref radius } => {
+                    let mut sv =
+                        serializer.serialize_struct_variant("Shape", 0, "Circle", 1)?;
+                    sv.serialize_field("radius", radius)?;
+                    sv.end()
+                }
+            }
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Full Working Example
+
+The following complete implementation serializes a `Color` type that holds an RGB triple along with an optional name. It demonstrates combining struct serialization with an `Option` field, and using `ser::Error::custom` to produce a descriptive error when validation fails.
+
+```rust
+use serde::ser::{self, Serialize, SerializeStruct, Serializer};
+
+#[derive(Debug)]
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+    name: Option<String>,
+}
+
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Count only the fields we actually emit.
+        // `name` is always present as Some or None, so field count is 4.
+        let mut state = serializer.serialize_struct("Color", 4)?;
+        state.serialize_field("r", &self.r)?;
+        state.serialize_field("g", &self.g)?;
+        state.serialize_field("b", &self.b)?;
+        state.serialize_field("name", &self.name)?;
+        state.end()
+    }
+}
+
+// Example: custom validation before serializing
+struct ValidatedHex(String);
+
+impl Serialize for ValidatedHex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.0.chars().all(|c| c.is_ascii_hexdigit()) {
+            serializer.serialize_str(&self.0)
+        } else {
+            Err(ser::Error::custom(format!(
+                "invalid hex string: {:?}",
+                self.0
+            )))
+        }
+    }
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="API Reference: Serialize" icon="book" href="/api/serialize">
+    Full documentation for the `Serialize` trait and all `Serializer` methods.
+  </Card>
+  <Card title="Derive Serialize" icon="wand-magic-sparkles" href="https://serde.rs/derive.html">
+    Automatically generate `Serialize` impls with `#[derive(Serialize)]`.
+  </Card>
+</CardGroup>

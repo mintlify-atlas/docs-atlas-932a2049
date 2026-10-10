@@ -1,20 +1,66 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Serde: Serialization Framework for Rust"
+sidebarTitle: "Home"
+description: "Serde is a framework for serializing and deserializing Rust data structures efficiently and generically across any supported data format."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Serde is Rust's de facto serialization framework. It lets any data structure that implements `Serialize` or `Deserialize` work seamlessly with any data format — from JSON to TOML to MessagePack — with zero runtime reflection and compiler-optimized performance.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Understand Serde's design, how traits connect data structures to formats, and when to use the derive macros.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Add Serde to your project, derive `Serialize` and `Deserialize`, and serialize your first struct in minutes.
+  </Card>
+  <Card title="Attributes" icon="tag" href="/attributes">
+    Control serialization behavior with `#[serde(...)]` attributes — rename fields, skip values, flatten maps, and more.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/serialize">
+    Full reference for `Serialize`, `Deserialize`, `Serializer`, `Deserializer`, and all associated traits.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What is Serde?
+
+Serde is built on Rust's trait system. A type that implements `Serialize` knows how to describe itself to any serializer. A type that implements `Deserialize` knows how to reconstruct itself from any deserializer. The data format crate (like `serde_json`) provides the `Serializer` and `Deserializer` implementations.
+
+This separation means you write serialization logic once — and it works with every format, forever.
+
+<Steps>
+  <Step title="Add serde to Cargo.toml">
+    Add `serde` with the `derive` feature, plus a format crate like `serde_json`.
+  </Step>
+  <Step title="Derive Serialize and Deserialize">
+    Annotate your structs and enums with `#[derive(Serialize, Deserialize)]` — no boilerplate required.
+  </Step>
+  <Step title="Serialize and deserialize">
+    Call functions from your chosen format crate, such as `serde_json::to_string` and `serde_json::from_str`.
+  </Step>
+  <Step title="Customize with attributes">
+    Use `#[serde(...)]` attributes to rename fields, skip values, apply defaults, and control enum representations.
+  </Step>
+</Steps>
+
+## Explore by Topic
+
+<CardGroup cols={3}>
+  <Card title="Data Formats" icon="database" href="/data-formats">
+    Browse the 20+ community-maintained format crates that work with Serde out of the box.
+  </Card>
+  <Card title="Derive Macros" icon="wand-magic-sparkles" href="/derive">
+    Learn how `#[derive(Serialize, Deserialize)]` generates efficient implementations at compile time.
+  </Card>
+  <Card title="Custom Impls" icon="wrench" href="/impl-serialize">
+    Implement `Serialize` or `Deserialize` by hand for types with special requirements.
+  </Card>
+  <Card title="Writing a Format" icon="plug" href="/impl-data-format">
+    Build your own Serde-compatible data format by implementing `Serializer` and `Deserializer`.
+  </Card>
+  <Card title="no_std Support" icon="microchip" href="/no-std">
+    Use Serde in embedded and no_std environments with the `alloc` feature flag.
+  </Card>
+  <Card title="Feature Flags" icon="toggle-on" href="/feature-flags">
+    Enable `derive`, `alloc`, `rc`, and `unstable` features to match your project's requirements.
+  </Card>
+</CardGroup>

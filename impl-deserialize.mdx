@@ -1,0 +1,279 @@
+---
+title: "Implement Deserialize for Custom Rust Types"
+sidebarTitle: "Impl Deserialize"
+description: "Learn how to manually implement Serde's Deserialize trait using the Visitor pattern, covering newtypes, structs via MapAccess, and enums via EnumAccess."
+---
+
+Deserialization is inherently more complex than serialization because the data format drives the process: your code must be prepared to receive any of the types in the Serde data model and map them onto your Rust type. Serde's `#[derive(Deserialize)]` handles this automatically for most cases, but you will need a manual implementation when the type is defined in an external crate, when the deserialization logic has special requirements, or when you need zero-copy borrowing from the input buffer.
+
+## The Deserialize Trait
+
+```rust
+pub trait Deserialize<'de>: Sized {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>;
+}
+```
+
+The lifetime `'de` is the lifetime of data that may be **borrowed** from the input during deserialization. When `Self` contains a `&'de str` or `&'de [u8]`, that borrowed data must outlive `'de`. When `Self` only contains owned data such as `String` or `Vec<T>`, you can bound it as `for<'de> Deserialize<'de>` (also spelled `DeserializeOwned`).
+
+## The Visitor Pattern
+
+Unlike serialization — where you call one method on the serializer — deserialization works by giving the deserializer a `Visitor` object. The deserializer inspects the input, then calls whichever `Visitor` method matches what it found. Your `Visitor` converts that raw input into your Rust type.
+
+The `Visitor` trait requires one mandatory method and provides default implementations for all input-type methods that return a type error:
+
+```rust
+pub trait Visitor<'de>: Sized {
+    /// The Rust type this visitor produces.
+    type Value;
+
+    /// Describes what this visitor expects (used in error messages).
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result;
+
+    // Override the methods for every input type you accept:
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> { ... }
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { ... }
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { ... }
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { ... }
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> { ... }
+    fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Self::Value, E> { ... }
+    fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> { ... }
+    fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> { ... }
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> { ... }
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> { ... }
+    fn visit_enum<A: EnumAccess<'de>>(self, data: A) -> Result<Self::Value, A::Error> { ... }
+}
+```
+
+The `expecting` string completes the sentence "This Visitor expects to receive …". It should be lowercase and end without a period, for example `"a non-negative integer"` or `"a map with string keys"`.
+
+## The `'de` Lifetime and Zero-Copy Deserialization
+
+The `'de` lifetime enables **zero-copy** deserialization. When a format like `serde_json` deserializes a string that is already valid UTF-8 in the input buffer, it can hand your visitor a `&'de str` pointing directly into that buffer, avoiding an allocation. To take advantage of this, override `visit_borrowed_str` in addition to `visit_str`.
+
+<CardGroup cols={2}>
+  <Card title="Use &'de str" icon="bolt">
+    When your type borrows the string data. The input buffer must outlive the deserialized value. Use `Deserialize<'de>` as the bound.
+  </Card>
+  <Card title="Use String" icon="box">
+    When your type owns the string data. Works with any format, any input lifetime. Use `DeserializeOwned` as the bound.
+  </Card>
+</CardGroup>
+
+## Example: Newtype Wrapper
+
+The simplest case — wrapping a single value — only needs `visit_str` (or whichever primitive method matches your inner type):
+
+```rust
+use serde::de::{self, Deserialize, Deserializer, Visitor};
+use std::fmt;
+
+/// A non-empty string that rejects empty input during deserialization.
+struct NonEmptyString(String);
+
+struct NonEmptyStringVisitor;
+
+impl<'de> Visitor<'de> for NonEmptyStringVisitor {
+    type Value = NonEmptyString;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a non-empty string")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<NonEmptyString, E>
+    where
+        E: de::Error,
+    {
+        if value.is_empty() {
+            Err(de::Error::invalid_value(
+                de::Unexpected::Str(value),
+                &self,
+            ))
+        } else {
+            Ok(NonEmptyString(value.to_owned()))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NonEmptyString {
+    fn deserialize<D>(deserializer: D) -> Result<NonEmptyString, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_string(NonEmptyStringVisitor)
+    }
+}
+```
+
+<Tip>
+  You only need to implement the `visit_*` methods for the input types your type can meaningfully accept. Any unimplemented method falls back to the default, which calls `de::Error::invalid_type` with the `expecting` message you provided.
+</Tip>
+
+## Example: Struct via MapAccess
+
+Deserializing a struct from a map (as you would from JSON `{}`) requires a `Visitor` that accepts `visit_map`. The `MapAccess` object lets you iterate over key–value pairs. A common pattern uses an inner `Field` enum to represent known field names.
+
+```rust
+use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
+use std::fmt;
+
+struct Duration {
+    secs: u64,
+    nanos: u32,
+}
+
+impl<'de> Deserialize<'de> for Duration {
+    fn deserialize<D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Recognized field names.
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field { Secs, Nanos }
+
+        struct DurationVisitor;
+
+        impl<'de> Visitor<'de> for DurationVisitor {
+            type Value = Duration;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct Duration")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Duration, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut secs: Option<u64> = None;
+                let mut nanos: Option<u32> = None;
+
+                while let Some(key) = map.next_key::<Field>()? {
+                    match key {
+                        Field::Secs => {
+                            if secs.is_some() {
+                                return Err(de::Error::duplicate_field("secs"));
+                            }
+                            secs = Some(map.next_value()?);
+                        }
+                        Field::Nanos => {
+                            if nanos.is_some() {
+                                return Err(de::Error::duplicate_field("nanos"));
+                            }
+                            nanos = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let secs  = secs.ok_or_else(|| de::Error::missing_field("secs"))?;
+                let nanos = nanos.ok_or_else(|| de::Error::missing_field("nanos"))?;
+                Ok(Duration { secs, nanos })
+            }
+        }
+
+        const FIELDS: &[&str] = &["secs", "nanos"];
+        deserializer.deserialize_struct("Duration", FIELDS, DurationVisitor)
+    }
+}
+```
+
+`MapAccess::next_key::<K>()` deserializes the next key as type `K`, returning `Ok(None)` when the map is exhausted. `MapAccess::next_value::<V>()` deserializes the corresponding value. Always call them in key → value order; calling `next_value` before `next_key` is incorrect and may panic.
+
+## Example: Enum via EnumAccess
+
+Deserializing an enum requires a `Visitor` that calls `visit_enum`. The `EnumAccess` object identifies which variant is present, and the associated `VariantAccess` object deserializes the variant's payload.
+
+```rust
+use serde::de::{self, Deserialize, Deserializer, EnumAccess, VariantAccess, Visitor};
+use std::fmt;
+
+enum MyEvent {
+    Click,
+    KeyPress(char),
+    Resize { width: u32, height: u32 },
+}
+
+impl<'de> Deserialize<'de> for MyEvent {
+    fn deserialize<D>(deserializer: D) -> Result<MyEvent, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const VARIANTS: &[&str] = &["Click", "KeyPress", "Resize"];
+
+        struct MyEventVisitor;
+
+        impl<'de> Visitor<'de> for MyEventVisitor {
+            type Value = MyEvent;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("enum MyEvent")
+            }
+
+            fn visit_enum<A>(self, data: A) -> Result<MyEvent, A::Error>
+            where
+                A: EnumAccess<'de>,
+            {
+                // Identify the variant by its string name.
+                let (variant_name, variant): (String, _) = data.variant()?;
+
+                match variant_name.as_str() {
+                    "Click" => {
+                        variant.unit_variant()?;
+                        Ok(MyEvent::Click)
+                    }
+                    "KeyPress" => {
+                        let ch = variant.newtype_variant()?;
+                        Ok(MyEvent::KeyPress(ch))
+                    }
+                    "Resize" => {
+                        // tuple_variant drives a SeqAccess for positional fields,
+                        // or use struct_variant with a MapAccess visitor.
+                        let (width, height) = variant.tuple_variant(2, ResizeVisitor)?;
+                        Ok(MyEvent::Resize { width, height })
+                    }
+                    unknown => Err(de::Error::unknown_variant(unknown, VARIANTS)),
+                }
+            }
+        }
+
+        // A small helper visitor for the Resize tuple fields.
+        struct ResizeVisitor;
+
+        impl<'de> Visitor<'de> for ResizeVisitor {
+            type Value = (u32, u32);
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("width and height as two u32 values")
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<(u32, u32), A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let width  = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let height = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                Ok((width, height))
+            }
+        }
+
+        deserializer.deserialize_enum("MyEvent", VARIANTS, MyEventVisitor)
+    }
+}
+```
+
+<Warning>
+  `EnumAccess::variant()` returns a `(V, VariantAccess)` pair. You **must** call exactly one of `unit_variant`, `newtype_variant`, `tuple_variant`, or `struct_variant` on the `VariantAccess` — calling none or more than one is incorrect behaviour.
+</Warning>
+
+<Note>
+  **Stateful deserialization with `DeserializeSeed`**: if you need to pass runtime state (an arena allocator, a symbol table, a pre-allocated buffer) into a deserialization call, use the `DeserializeSeed` trait. It is the stateful counterpart of `Deserialize` — instead of being a ZST marker, the seed type carries the state and implements `deserialize(self, deserializer)` where `self` is consumed along with the data.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="API Reference: Deserialize" icon="book" href="/api/deserialize">
+    Full documentation for the `Deserialize` and `Visitor` traits.
+  </Card>
+  <Card title="Understanding Lifetimes" icon="clock" href="https://serde.rs/lifetimes.html">
+    Deep dive into the `'de` lifetime and zero-copy deserialization.
+  </Card>
+</CardGroup>

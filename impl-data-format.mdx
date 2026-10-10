@@ -1,0 +1,399 @@
+---
+title: "Write a Serde Data Format: Serializer and Deserializer"
+sidebarTitle: "Custom Format"
+description: "Write a Serde data format by implementing Serializer and Deserializer, covering compound types, the Impossible helper, and forward_to_deserialize_any."
+---
+
+Writing your own Serde data format means implementing two traits: `Serializer` (which receives calls from `Serialize` impls and produces your output) and `Deserializer` (which reads your input and drives `Visitor` impls). You would do this when you have a custom binary protocol, a proprietary text encoding, an in-memory representation like `serde_json::Value`, or any other format that is not already covered by the ecosystem. The Serde data model defines 29 types that every format must be able to represent; your job is to map those types onto whatever your format natively supports.
+
+## Two Sides of a Format
+
+<CardGroup cols={2}>
+  <Card title="Serializer" icon="arrow-right-from-bracket">
+    Receives method calls from `Serialize` impls. Each call corresponds to one Serde data-model type. Writes or accumulates your output format.
+  </Card>
+  <Card title="Deserializer" icon="arrow-right-to-bracket">
+    Reads your input format. Calls the appropriate `Visitor` method based on what it finds (or what the `Deserialize` impl requests).
+  </Card>
+</CardGroup>
+
+The two halves are independent: you can implement only `Serializer` if your crate only writes a format, or only `Deserializer` if it only reads one.
+
+---
+
+## The Serializer Trait
+
+`Serializer` lives in `serde::ser`. Its full signature requires several associated types and dozens of methods, but they fall into clear groups.
+
+### Associated Types
+
+```rust
+pub trait Serializer: Sized {
+    /// What a successful serialization produces. Set to `()` when writing
+    /// into an `io::Write` or internal buffer; set to your output type when
+    /// building in-memory data structures.
+    type Ok;
+
+    /// The error type returned on failure.
+    type Error: ser::Error;
+
+    // One associated type per compound method, each must implement the
+    // matching sub-trait with the same Ok/Error:
+    type SerializeSeq: SerializeSeq<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTuple: SerializeTuple<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTupleStruct: SerializeTupleStruct<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTupleVariant: SerializeTupleVariant<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeMap: SerializeMap<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeStruct: SerializeStruct<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeStructVariant: SerializeStructVariant<Ok = Self::Ok, Error = Self::Error>;
+
+    // ... primitive and compound methods
+}
+```
+
+### Primitive Methods
+
+Each primitive type in the Serde data model has a corresponding method:
+
+```rust
+fn serialize_bool(self, v: bool)       -> Result<Self::Ok, Self::Error>;
+fn serialize_i8(self, v: i8)           -> Result<Self::Ok, Self::Error>;
+fn serialize_i16(self, v: i16)         -> Result<Self::Ok, Self::Error>;
+fn serialize_i32(self, v: i32)         -> Result<Self::Ok, Self::Error>;
+fn serialize_i64(self, v: i64)         -> Result<Self::Ok, Self::Error>;
+fn serialize_u8(self, v: u8)           -> Result<Self::Ok, Self::Error>;
+fn serialize_u16(self, v: u16)         -> Result<Self::Ok, Self::Error>;
+fn serialize_u32(self, v: u32)         -> Result<Self::Ok, Self::Error>;
+fn serialize_u64(self, v: u64)         -> Result<Self::Ok, Self::Error>;
+fn serialize_f32(self, v: f32)         -> Result<Self::Ok, Self::Error>;
+fn serialize_f64(self, v: f64)         -> Result<Self::Ok, Self::Error>;
+fn serialize_char(self, v: char)       -> Result<Self::Ok, Self::Error>;
+fn serialize_str(self, v: &str)        -> Result<Self::Ok, Self::Error>;
+fn serialize_bytes(self, v: &[u8])     -> Result<Self::Ok, Self::Error>;
+fn serialize_none(self)                -> Result<Self::Ok, Self::Error>;
+fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<Self::Ok, Self::Error>;
+fn serialize_unit(self)                -> Result<Self::Ok, Self::Error>;
+fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error>;
+```
+
+If your format does not distinguish between, say, `i8` and `i64`, a reasonable implementation casts and forwards:
+
+```rust
+fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
+    self.serialize_i64(v as i64)
+}
+```
+
+`serialize_i128` and `serialize_u128` have default implementations that return an error; override them only if your format supports 128-bit integers.
+
+### Compound Methods
+
+The compound methods begin a multi-step serialization. Each one returns a builder type whose methods you implement separately.
+
+```rust
+// Variable-length sequence
+fn serialize_seq(self, len: Option<usize>)
+    -> Result<Self::SerializeSeq, Self::Error>;
+
+// Fixed-length sequence (length known at deserialization time without reading data)
+fn serialize_tuple(self, len: usize)
+    -> Result<Self::SerializeTuple, Self::Error>;
+
+// Named fixed-length sequence, e.g. struct Rgb(u8, u8, u8)
+fn serialize_tuple_struct(self, name: &'static str, len: usize)
+    -> Result<Self::SerializeTupleStruct, Self::Error>;
+
+// Tuple enum variant, e.g. E::T(u8, u8)
+fn serialize_tuple_variant(
+    self, name: &'static str, variant_index: u32,
+    variant: &'static str, len: usize,
+) -> Result<Self::SerializeTupleVariant, Self::Error>;
+
+// Key-value map with runtime keys
+fn serialize_map(self, len: Option<usize>)
+    -> Result<Self::SerializeMap, Self::Error>;
+
+// Named key-value record with compile-time keys
+fn serialize_struct(self, name: &'static str, len: usize)
+    -> Result<Self::SerializeStruct, Self::Error>;
+
+// Struct enum variant, e.g. E::S { r: u8, g: u8, b: u8 }
+fn serialize_struct_variant(
+    self, name: &'static str, variant_index: u32,
+    variant: &'static str, len: usize,
+) -> Result<Self::SerializeStructVariant, Self::Error>;
+```
+
+The returned builder must implement the matching sub-trait. For `SerializeStruct` that is:
+
+```rust
+pub trait SerializeStruct {
+    type Ok;
+    type Error: ser::Error;
+
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T)
+        -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize;
+
+    fn skip_field(&mut self, key: &'static str) -> Result<(), Self::Error>;
+
+    fn end(self) -> Result<Self::Ok, Self::Error>;
+}
+```
+
+`SerializeSeq` uses `serialize_element` / `end`; `SerializeMap` uses `serialize_key`, `serialize_value`, and the default `serialize_entry` / `end`.
+
+### The `Impossible` Helper
+
+When your format does not support a particular compound type, you cannot return a meaningful builder — but you still need to satisfy the associated type bound. The `serde::ser::Impossible<Ok, Error>` type is an uninhabited struct that implements all seven compound sub-traits by branching on an internal `Void` enum (a never type). Use it as the associated type and return an error from the method:
+
+```rust
+use serde::ser::{Impossible, Serializer};
+
+impl Serializer for MySimpleSerializer {
+    type Ok = ();
+    type Error = MyError;
+
+    // This format does not support sequences.
+    type SerializeSeq = Impossible<(), MyError>;
+
+    fn serialize_seq(self, _len: Option<usize>)
+        -> Result<Self::SerializeSeq, Self::Error>
+    {
+        Err(MyError::custom("sequences are not supported"))
+    }
+
+    // ... all other methods
+}
+```
+
+Because `Impossible` can never be constructed, the compiler accepts the `impl SerializeSeq for Impossible<…>` without you ever having to write that code yourself.
+
+---
+
+## The Deserializer Trait
+
+`Deserializer` lives in `serde::de`. Its role is the inverse of `Serializer`: it reads your format and calls the appropriate `Visitor` method.
+
+### Associated Type
+
+```rust
+pub trait Deserializer<'de>: Sized {
+    /// The error type for this format.
+    type Error: de::Error;
+
+    // ... methods
+}
+```
+
+Unlike `Serializer`, `Deserializer` has only one associated type. The `'de` lifetime is the lifetime of data that may be **borrowed** from the input buffer by zero-copy visitors.
+
+### deserialize_any — Self-Describing Formats
+
+```rust
+fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+where
+    V: Visitor<'de>;
+```
+
+If your format is self-describing (JSON, YAML, TOML), the deserializer can inspect the input to determine the type and call the matching visitor method directly. For example, a JSON deserializer that sees `{` calls `visitor.visit_map(...)`, and one that sees `42` calls `visitor.visit_i64(42)`. This enables generic deserialization into untyped values like `serde_json::Value`.
+
+### Type-Hinted Methods
+
+Non-self-describing formats (Postcard, MessagePack in schema mode) cannot infer the type from the bytes alone — they need a hint from the `Deserialize` impl:
+
+```rust
+fn deserialize_bool<V>(self, visitor: V)   -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_i8<V>(self, visitor: V)     -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+// ... i16 through i128, u8 through u128, f32, f64, char
+fn deserialize_str<V>(self, visitor: V)    -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_bytes<V>(self, visitor: V)  -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_unit<V>(self, visitor: V)   -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_seq<V>(self, visitor: V)    -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_map<V>(self, visitor: V)    -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_struct<V>(self, name: &'static str, fields: &'static [&'static str], visitor: V)
+    -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_enum<V>(self, name: &'static str, variants: &'static [&'static str], visitor: V)
+    -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error> where V: Visitor<'de>;
+```
+
+For a non-self-describing format, each `deserialize_*` method reads from the input according to the hint and calls the matching `visitor.visit_*` method. For a self-describing format, many of these can simply forward to `deserialize_any`.
+
+### `forward_to_deserialize_any!`
+
+Writing forwarding implementations for every `deserialize_*` method is mechanical. The `forward_to_deserialize_any!` macro generates them for you. Each generated method ignores the type hint and delegates to `deserialize_any`:
+
+```rust
+use serde::forward_to_deserialize_any;
+use serde::de::{value, Deserializer, Visitor};
+
+struct JsonValueDeserializer {
+    // holds a serde_json::Value or similar
+}
+
+impl<'de> Deserializer<'de> for JsonValueDeserializer {
+    type Error = value::Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        // Inspect self, then call visitor.visit_bool / visit_i64 / visit_map / etc.
+        // based on what the value actually contains.
+        todo!()
+    }
+
+    // Generate all remaining methods as: fn deserialize_X(...) { self.deserialize_any(visitor) }
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
+    }
+}
+```
+
+You can list only a subset of identifiers to forward; the remaining methods you implement manually. If your `Deserializer` uses a lifetime parameter other than `'de` or a visitor type parameter other than `V`, the macro supports an explicit form:
+
+```rust
+forward_to_deserialize_any! {
+    <W: Visitor<'q>>
+    bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 str string
+}
+```
+
+<Warning>
+  Never use `forward_to_deserialize_any!` in a non-self-describing format. Non-self-describing formats must implement each `deserialize_*` method properly, because they rely on the type hint to know how to read the next bytes from the input.
+</Warning>
+
+---
+
+## Putting It Together: Skeleton of a Simple Format
+
+The following shows the structural outline of a minimal text format that encodes everything as a string. It is not production-ready, but demonstrates how the pieces connect:
+
+<Steps>
+  <Step title="Define your output/input types and error type">
+    ```rust
+    use serde::{ser, de};
+    use std::fmt;
+
+    pub struct Error(String);
+
+    impl ser::Error for Error {
+        fn custom<T: fmt::Display>(msg: T) -> Self {
+            Error(msg.to_string())
+        }
+    }
+
+    impl de::Error for Error {
+        fn custom<T: fmt::Display>(msg: T) -> Self {
+            Error(msg.to_string())
+        }
+    }
+    ```
+  </Step>
+  <Step title="Implement Serializer">
+    ```rust
+    use serde::ser::{self, Impossible, Serialize, Serializer};
+
+    pub struct StringSerializer;
+
+    impl Serializer for StringSerializer {
+        type Ok = String;
+        type Error = Error;
+
+        // Compound types are not supported in this toy format.
+        type SerializeSeq = Impossible<String, Error>;
+        type SerializeTuple = Impossible<String, Error>;
+        type SerializeTupleStruct = Impossible<String, Error>;
+        type SerializeTupleVariant = Impossible<String, Error>;
+        type SerializeMap = Impossible<String, Error>;
+        type SerializeStruct = Impossible<String, Error>;
+        type SerializeStructVariant = Impossible<String, Error>;
+
+        fn serialize_bool(self, v: bool) -> Result<String, Error> {
+            Ok(v.to_string())
+        }
+
+        fn serialize_i64(self, v: i64) -> Result<String, Error> {
+            Ok(v.to_string())
+        }
+
+        fn serialize_str(self, v: &str) -> Result<String, Error> {
+            Ok(v.to_owned())
+        }
+
+        fn serialize_seq(self, _len: Option<usize>) -> Result<Impossible<String, Error>, Error> {
+            Err(ser::Error::custom("sequences not supported"))
+        }
+
+        // ... forward all other integer/float/char methods to serialize_i64 etc.
+        // ... return errors from all other compound methods
+    }
+    ```
+  </Step>
+  <Step title="Implement Deserializer">
+    ```rust
+    use serde::de::{self, Deserializer, Visitor};
+    use serde::forward_to_deserialize_any;
+
+    pub struct StringDeserializer(String);
+
+    impl<'de> Deserializer<'de> for StringDeserializer {
+        type Error = Error;
+
+        fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Error>
+        where
+            V: Visitor<'de>,
+        {
+            visitor.visit_string(self.0)
+        }
+
+        fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Error>
+        where
+            V: Visitor<'de>,
+        {
+            match self.0.as_str() {
+                "true"  => visitor.visit_bool(true),
+                "false" => visitor.visit_bool(false),
+                other   => Err(de::Error::custom(
+                    format!("expected 'true' or 'false', got {:?}", other)
+                )),
+            }
+        }
+
+        // All other methods forward to deserialize_any (string representation).
+        forward_to_deserialize_any! {
+            i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map struct enum identifier ignored_any
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Reference Implementation
+
+The best way to understand what a full production-quality format looks like is to read the `serde_json` source. It covers every Serde feature, handles both self-describing deserialization (via `deserialize_any`) and strongly-typed deserialization, implements zero-copy string borrowing, and shows how to write `SeqAccess`, `MapAccess`, and `EnumAccess` types for the deserializer side.
+
+<Note>
+  When implementing `SeqAccess`, `MapAccess`, or `EnumAccess` on the deserializer side, you create new types that hold a reference to your deserializer's parser state. The deserializer's `deserialize_seq` / `deserialize_map` / `deserialize_enum` methods construct these types and hand them to the visitor.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="API Reference: Serializer" icon="book" href="/api/serializer">
+    Full documentation for the `Serializer` trait and all compound sub-traits.
+  </Card>
+  <Card title="API Reference: Deserializer" icon="book" href="/api/deserializer">
+    Full documentation for the `Deserializer` trait, `Visitor`, and access traits.
+  </Card>
+</CardGroup>

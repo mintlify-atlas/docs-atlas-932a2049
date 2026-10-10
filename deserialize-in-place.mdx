@@ -1,0 +1,244 @@
+---
+title: "In-Place Deserialization and DeserializeSeed"
+sidebarTitle: "In-Place Deserialization"
+description: "Advanced Serde techniques: stateful deserialization with DeserializeSeed, in-place mutation of existing values, and zero-copy borrowing with the 'de lifetime."
+---
+
+For most use cases the standard `Deserialize` trait is all you need: call a format's `from_str` or `from_bytes` function and get back a freshly allocated value. But in performance-sensitive code — parsers that process thousands of messages per second, game servers deserializing state on every tick, or embedded systems with tight memory budgets — three advanced techniques give you meaningful wins: `DeserializeSeed` for carrying external context into a deserializer, in-place deserialization for reusing existing allocations, and the `'de` lifetime for borrowing directly from the input buffer without any copying.
+
+---
+
+## Section 1: `DeserializeSeed` — Stateful Deserialization
+
+The standard `Deserialize` trait is stateless: each call produces a brand-new value. `DeserializeSeed` is the stateful counterpart. It lets you pass an initial piece of data — the *seed* — into the deserialization process, making that data available to the visitor logic that parses the input.
+
+### Trait Signature
+
+```rust
+pub trait DeserializeSeed<'de>: Sized {
+    type Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>;
+}
+```
+
+The key difference from `Deserialize` is that `self` is consumed — the seed becomes part of the deserialization state. The return type `Value` can be anything, including `()` when the goal is to mutate something through the seed rather than produce a new allocation.
+
+### Use Case: Appending into a Pre-Allocated Buffer
+
+Suppose you receive a stream of JSON arrays like `[[1, 2], [3, 4, 5], [6]]` and want to flatten them into a single `Vec<u64>` without allocating a new vector for each inner array. `DeserializeSeed` makes this possible:
+
+```rust
+use serde::de::{Deserialize, DeserializeSeed, Deserializer, SeqAccess, Visitor};
+use std::fmt;
+use std::marker::PhantomData;
+
+/// Seed that appends elements onto an existing Vec.
+struct ExtendVec<'a, T: 'a>(&'a mut Vec<T>);
+
+impl<'de, 'a, T> DeserializeSeed<'de> for ExtendVec<'a, T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ExtendVecVisitor<'a, T: 'a>(&'a mut Vec<T>);
+
+        impl<'de, 'a, T: Deserialize<'de>> Visitor<'de> for ExtendVecVisitor<'a, T> {
+            type Value = ();
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an array of values")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<(), A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                if let Some(hint) = seq.size_hint() {
+                    self.0.reserve(hint);
+                }
+                while let Some(elem) = seq.next_element()? {
+                    self.0.push(elem);
+                }
+                Ok(())
+            }
+        }
+
+        deserializer.deserialize_seq(ExtendVecVisitor(self.0))
+    }
+}
+```
+
+### Use Case: Deserializing with a Type Registry
+
+Another common pattern is deserializing a dynamically-typed payload where the concrete type is determined by a string tag looked up in a registry. Pass the registry as the seed:
+
+```rust
+use serde::de::{DeserializeSeed, Deserializer};
+use std::collections::HashMap;
+
+type Factory = fn(&mut dyn erased_serde::Deserializer) -> Box<dyn std::any::Any>;
+
+struct TypeRegistry<'a>(&'a HashMap<String, Factory>);
+
+// The `deserialize` method on TypeRegistry would read the type tag first,
+// look it up in self.0, then call the factory with the remaining input.
+```
+
+<Note>
+  When an API requires a `DeserializeSeed` but you have no state to pass, use
+  `std::marker::PhantomData<T>` as the seed. It implements `DeserializeSeed`
+  by delegating to `T::deserialize`, so it acts as a zero-cost adapter between
+  the two APIs.
+</Note>
+
+---
+
+## Section 2: In-Place Deserialization
+
+In-place deserialization mutates an *existing* value rather than constructing a new one. This avoids deallocating and reallocating heap memory when the same logical buffer is used repeatedly — for example, a server that deserializes a request struct on every incoming message.
+
+### The Method Signature
+
+The `Deserialize` trait has a second, lesser-known method alongside `deserialize`:
+
+```rust
+fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+where
+    D: Deserializer<'de>,
+```
+
+Unlike `deserialize`, which takes nothing and returns `Self`, `deserialize_in_place` receives a mutable reference to an existing value and overwrites it. The return type is `()` — success means `place` has been updated.
+
+### Default Implementation
+
+The trait provides a default implementation that simply calls `deserialize` and overwrites the value:
+
+```rust
+// Default provided by Serde — always correct, not always optimal.
+fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+where
+    D: Deserializer<'de>,
+{
+    *place = Deserialize::deserialize(deserializer)?;
+    Ok(())
+}
+```
+
+### When to Override It
+
+Override `deserialize_in_place` for types that contain heap-allocated buffers (like `Vec<T>` or `String`) and are deserialized in a hot loop. The derived implementation from `serde_derive` will generate an optimised `deserialize_in_place` that reuses the existing allocation by calling `clear()` followed by in-place filling, rather than deallocating and reallocating.
+
+```rust
+// This struct benefits from in-place deserialization because each field
+// is a Vec or String that can be cleared and refilled without reallocation
+// if the new data fits within the existing capacity.
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Frame {
+    timestamp: u64,
+    data: Vec<u8>,    // reused buffer — no realloc if capacity is sufficient
+    label: String,    // same
+}
+
+fn process_stream<'de, D: serde::de::Deserializer<'de>>(
+    frame: &mut Frame,
+    deserializer: D,
+) -> Result<(), D::Error> {
+    // Mutate in place — reuses frame's existing heap allocations.
+    serde::Deserialize::deserialize_in_place(deserializer, frame)
+}
+```
+
+<Note>
+  If `deserialize_in_place` returns an error, `place` is left in an
+  indeterminate (but memory-safe) state — some fields may have been partially
+  overwritten. This is documented behaviour. Do not rely on the old contents of
+  `place` after an error.
+</Note>
+
+---
+
+## Section 3: Zero-Copy Deserialization with `'de`
+
+The `'de` lifetime that appears in `Deserialize<'de>` and `Deserializer<'de>` is the lifetime of data that the deserialized value is allowed to *borrow* from the input buffer. When a type borrows from the input, the deserializer can hand back a reference into its own memory instead of copying bytes into a new allocation.
+
+### Borrowing `&'de str` and `&'de [u8]`
+
+```rust
+use serde::Deserialize;
+
+// This struct borrows its string fields directly from the input bytes.
+// No String allocation occurs during deserialization.
+#[derive(Debug, Deserialize)]
+struct LogEntry<'de> {
+    #[serde(borrow)]
+    level: &'de str,
+    #[serde(borrow)]
+    message: &'de str,
+    code: u32,
+}
+
+// The input buffer must outlive the LogEntry.
+fn parse(input: &str) -> serde_json::Result<LogEntry<'_>> {
+    serde_json::from_str(input)
+}
+```
+
+The `#[serde(borrow)]` attribute on `&'de str` and `&'de [u8]` fields is required to tell `serde_derive` to generate borrowing deserialization code. Raw references (`&str`, `&[u8]`) without any explicit lifetime annotation will have their lifetimes inferred as implicit borrows from `'de`, but the attribute makes the intent explicit and is always safe to include.
+
+### `Cow<'de, str>` — Optional Borrowing
+
+`Cow<'de, str>` lets a field borrow when the input allows it (e.g., a string that requires no escape processing in JSON) and fall back to an owned `String` when copying is unavoidable (e.g., a string with `\n` escapes):
+
+```rust
+use std::borrow::Cow;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct Config<'de> {
+    // Borrows from input when possible; allocates when escaping is needed.
+    #[serde(borrow)]
+    name: Cow<'de, str>,
+
+    // Always owned — no lifetime parameter needed.
+    value: String,
+}
+```
+
+Use `Cow<'de, str>` when:
+- You want zero-copy in the common case but cannot guarantee the input will always be borrowable.
+- You are writing a library that should be maximally efficient without requiring callers to manage input lifetimes.
+
+### The `DeserializeOwned` Bound
+
+When you write a generic function that deserializes from a reader (rather than a string slice), the output cannot borrow from any input because the reader owns its data transiently. In that case, use the `DeserializeOwned` bound:
+
+```rust
+use serde::de::DeserializeOwned;
+use std::io::Read;
+
+fn from_reader<R: Read, T: DeserializeOwned>(reader: R) -> serde_json::Result<T> {
+    serde_json::from_reader(reader)
+}
+```
+
+`DeserializeOwned` is equivalent to `for<'de> Deserialize<'de>` — it asserts that the type can be deserialized for *any* lifetime, meaning it owns all its data.
+
+<Note>
+  Zero-copy deserialization depends on the format crate, not just Serde itself.
+  **serde_json** supports borrowing `&str` from JSON strings that contain no
+  escape sequences. **postcard** supports borrowing `&[u8]` from its binary
+  format. Other formats may not support borrowing at all — check the
+  documentation for your format crate. If the format does not support it,
+  `&'de str` fields will still compile correctly; the format will simply copy
+  the data and hand back a reference to the copy.
+</Note>

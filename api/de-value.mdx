@@ -1,0 +1,303 @@
+---
+title: "de::value Module — Simple Deserializer Implementations"
+sidebarTitle: "de::value"
+description: "The serde::de::value module provides ready-made Deserializer types for primitives, strings, bytes, and collections, plus a minimal Error type."
+---
+
+The `serde::de::value` module provides simple, ready-made `Deserializer` implementations for primitive types and collections. These types are the backing infrastructure behind the `IntoDeserializer` trait: calling `.into_deserializer()` on a `bool`, `&str`, `Vec<T>`, or most other standard-library values produces one of the structs documented here. The module is also useful for unit-testing your own `Deserialize` implementations without pulling in a full serialization format like `serde_json`.
+
+## `de::value::Error`
+
+The module exports a minimal error type that satisfies `de::Error` and `ser::Error`:
+
+```rust
+#[derive(Clone, PartialEq)]
+pub struct Error { /* opaque */ }
+
+impl de::Error for Error {
+    fn custom<T: Display>(msg: T) -> Self { ... }
+}
+
+impl ser::Error for Error {
+    fn custom<T: Display>(msg: T) -> Self { ... }
+}
+
+impl Display for Error { ... }
+impl Debug for Error { ... }
+
+// Only on std builds:
+#[cfg(feature = "std")]
+impl std::error::Error for Error { ... }
+```
+
+On `std` and `alloc` builds the error message is heap-allocated as a `Box<str>`. On a bare `no_std` environment without `alloc`, the type still compiles and satisfies the trait bounds but carries no message text.
+
+<Note>
+`value::Error` is the default `E` type parameter for `IntoDeserializer<'de, E>`, so you typically do not need to name it explicitly unless you want to propagate a different error type.
+</Note>
+
+---
+
+## Primitive Deserializer Types
+
+Each primitive type `T` is paired with a `TDeserializer<E>` struct that wraps a single value and, when asked to deserialize, calls the corresponding `Visitor::visit_*` method.
+
+### Boolean
+
+| Type | Wraps | Calls |
+|---|---|---|
+| `BoolDeserializer<E>` | `bool` | `Visitor::visit_bool` |
+
+### Signed Integers
+
+| Type | Wraps | Calls |
+|---|---|---|
+| `I8Deserializer<E>` | `i8` | `Visitor::visit_i8` |
+| `I16Deserializer<E>` | `i16` | `Visitor::visit_i16` |
+| `I32Deserializer<E>` | `i32` | `Visitor::visit_i32` |
+| `I64Deserializer<E>` | `i64` | `Visitor::visit_i64` |
+| `I128Deserializer<E>` | `i128` | `Visitor::visit_i128` |
+| `IsizeDeserializer<E>` | `isize` | `Visitor::visit_i64` (casts) |
+
+### Unsigned Integers
+
+| Type | Wraps | Calls |
+|---|---|---|
+| `U8Deserializer<E>` | `u8` | `Visitor::visit_u8` |
+| `U16Deserializer<E>` | `u16` | `Visitor::visit_u16` |
+| `U32Deserializer<E>` | `u32` | `Visitor::visit_u32` (also supports `deserialize_enum`) |
+| `U64Deserializer<E>` | `u64` | `Visitor::visit_u64` |
+| `U128Deserializer<E>` | `u128` | `Visitor::visit_u128` |
+| `UsizeDeserializer<E>` | `usize` | `Visitor::visit_u64` (casts) |
+
+<Note>
+`U32Deserializer` additionally implements `EnumAccess`, allowing `u32` discriminants to drive enum deserialization.
+</Note>
+
+### Floating Point
+
+| Type | Wraps | Calls |
+|---|---|---|
+| `F32Deserializer<E>` | `f32` | `Visitor::visit_f32` |
+| `F64Deserializer<E>` | `f64` | `Visitor::visit_f64` |
+
+### Character
+
+| Type | Wraps | Calls |
+|---|---|---|
+| `CharDeserializer<E>` | `char` | `Visitor::visit_char` |
+
+---
+
+## String Deserializer Types
+
+Serde provides four string deserializers with different ownership semantics.
+
+```rust
+// Borrows from a shorter-lived reference — calls visit_str
+pub struct StrDeserializer<'a, E>    { value: &'a str, ... }
+
+// Borrows from the deserializer's own lifetime 'de — calls visit_borrowed_str
+pub struct BorrowedStrDeserializer<'de, E> { value: &'de str, ... }
+
+// Owns the string — calls visit_string            (alloc feature)
+pub struct StringDeserializer<E>    { value: String, ... }
+
+// Owns or borrows — dispatches based on Cow variant (alloc feature)
+pub struct CowStrDeserializer<'a, E> { value: Cow<'a, str>, ... }
+```
+
+`StrDeserializer`, `StringDeserializer`, and `BorrowedStrDeserializer` all additionally implement `EnumAccess`, making it possible to deserialize unit-variant enums from string values — which is exactly what the `IntoDeserializer` + `FromStr` pattern exploits.
+
+`CowStrDeserializer` calls `visit_str` for a borrowed `Cow` and `visit_string` for an owned one.
+
+---
+
+## Byte Deserializer Types
+
+```rust
+// Always calls visit_bytes
+pub struct BytesDeserializer<'a, E>   { value: &'a [u8], ... }
+
+// Always calls visit_borrowed_bytes — zero-copy
+pub struct BorrowedBytesDeserializer<'de, E> { value: &'de [u8], ... }
+```
+
+---
+
+## Collection Deserializer Types
+
+### `SeqDeserializer<I, E>`
+
+Wraps any `Iterator<Item = T>` where `T: IntoDeserializer<'de, E>`. Calls `Visitor::visit_seq` and provides the iterator as a `SeqAccess`.
+
+```rust
+pub struct SeqDeserializer<I, E> { ... }
+
+impl<I, E> SeqDeserializer<I, E> where I: Iterator {
+    pub fn new(iter: I) -> Self { ... }
+
+    /// After visiting, call end() to confirm the iterator is fully consumed.
+    pub fn end(self) -> Result<(), E> where E: de::Error { ... }
+}
+```
+
+`Vec<T>`, `BTreeSet<T>`, and `HashSet<T, S>` all implement `IntoDeserializer` through `SeqDeserializer`.
+
+### `SeqAccessDeserializer<A>`
+
+Wraps an existing `SeqAccess` implementation and exposes it as a `Deserializer`.
+
+```rust
+pub struct SeqAccessDeserializer<A> { seq: A }
+
+impl<A> SeqAccessDeserializer<A> {
+    pub fn new(seq: A) -> Self { ... }
+}
+```
+
+### `MapDeserializer<'de, I, E>`
+
+Wraps any iterator over `(K, V)` pairs where `K` and `V` both implement `IntoDeserializer<'de, E>`. Provides the pairs as a `MapAccess` and can also iterate them as a sequence of two-tuples via `SeqAccess`.
+
+```rust
+pub struct MapDeserializer<'de, I, E> { ... }
+
+impl<'de, I, E> MapDeserializer<'de, I, E> where I: Iterator {
+    pub fn new(iter: I) -> Self { ... }
+
+    /// Confirm the iterator was fully consumed.
+    pub fn end(self) -> Result<(), E> where E: de::Error { ... }
+}
+```
+
+`BTreeMap<K, V>` and `HashMap<K, V, S>` implement `IntoDeserializer` through `MapDeserializer`.
+
+### `MapAccessDeserializer<A>`
+
+Wraps an existing `MapAccess` and exposes it as a `Deserializer`. Also implements `EnumAccess`, treating the first map key as the variant name.
+
+```rust
+pub struct MapAccessDeserializer<A> { map: A }
+
+impl<A> MapAccessDeserializer<A> {
+    pub fn new(map: A) -> Self { ... }
+}
+```
+
+### `EnumAccessDeserializer<A>`
+
+Wraps an existing `EnumAccess` and exposes it as a `Deserializer` by calling `Visitor::visit_enum`.
+
+```rust
+pub struct EnumAccessDeserializer<A> { access: A }
+
+impl<A> EnumAccessDeserializer<A> {
+    pub fn new(access: A) -> Self { ... }
+}
+```
+
+### `UnitDeserializer<E>`
+
+Deserializes a `()` value. Calls `visit_unit` or `visit_none` (for `Option`).
+
+```rust
+pub struct UnitDeserializer<E> { ... }
+
+impl<E> UnitDeserializer<E> {
+    pub fn new() -> Self { ... }
+}
+```
+
+`()` implements `IntoDeserializer` through `UnitDeserializer`.
+
+---
+
+## IntoDeserializer Summary
+
+The following table summarises every `IntoDeserializer` implementation backed by the types in this module.
+
+| Source type | Resulting deserializer |
+|---|---|
+| `()` | `UnitDeserializer<E>` |
+| `bool` | `BoolDeserializer<E>` |
+| `i8` / `i16` / `i32` / `i64` / `i128` / `isize` | `I8Deserializer<E>` … `IsizeDeserializer<E>` |
+| `u8` / `u16` / `u32` / `u64` / `u128` / `usize` | `U8Deserializer<E>` … `UsizeDeserializer<E>` |
+| `f32` / `f64` | `F32Deserializer<E>` / `F64Deserializer<E>` |
+| `char` | `CharDeserializer<E>` |
+| `&'a str` | `StrDeserializer<'a, E>` |
+| `String` | `StringDeserializer<E>` *(alloc)* |
+| `Cow<'a, str>` | `CowStrDeserializer<'a, E>` *(alloc)* |
+| `&'a [u8]` | `BytesDeserializer<'a, E>` |
+| `Vec<T>` | `SeqDeserializer<vec::IntoIter<T>, E>` *(alloc)* |
+| `BTreeSet<T>` | `SeqDeserializer<btree_set::IntoIter<T>, E>` *(alloc)* |
+| `HashSet<T, S>` | `SeqDeserializer<hash_set::IntoIter<T>, E>` *(std)* |
+| `BTreeMap<K, V>` | `MapDeserializer<'de, btree_map::IntoIter<K, V>, E>` *(alloc)* |
+| `HashMap<K, V, S>` | `MapDeserializer<'de, hash_map::IntoIter<K, V>, E>` *(std)* |
+
+---
+
+## Complete Example: `FromStr` for an Enum
+
+The module-level docstring demonstrates the canonical pattern — using `IntoDeserializer` to implement `FromStr` for an enum without writing any custom deserialization logic:
+
+```rust
+use serde::de::{value, Deserialize, IntoDeserializer};
+use serde_derive::Deserialize;
+use std::str::FromStr;
+
+#[derive(Deserialize)]
+enum Setting {
+    On,
+    Off,
+}
+
+impl FromStr for Setting {
+    type Err = value::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::deserialize(s.into_deserializer())
+    }
+}
+
+fn main() {
+    let on: Setting  = "On".parse().unwrap();
+    let off: Setting = "Off".parse().unwrap();
+}
+```
+
+`s.into_deserializer()` produces a `StrDeserializer<value::Error>`. The `#[derive(Deserialize)]` macro on `Setting` generates a `Deserialize` impl that calls `deserialize_enum`; `StrDeserializer` handles that method by calling `visit_enum` with itself as the `EnumAccess`, and the variant name is matched against `"On"` and `"Off"` to produce the correct variant.
+
+---
+
+## When to Use This Module
+
+<CodeGroup>
+
+```rust Unit-testing a Deserialize impl
+use serde::de::{value::Error, Deserialize, IntoDeserializer};
+
+let deserializer = 42u64.into_deserializer();
+let result: MyType = MyType::deserialize(deserializer).unwrap();
+assert_eq!(result, MyType::from_u64(42));
+```
+
+```rust Implementing IntoDeserializer for a custom type
+use serde::de::{value, Deserializer, IntoDeserializer};
+
+struct Celsius(f64);
+
+impl<'de> IntoDeserializer<'de> for Celsius {
+    type Deserializer = value::F64Deserializer<value::Error>;
+
+    fn into_deserializer(self) -> Self::Deserializer {
+        value::F64Deserializer::new(self.0)
+    }
+}
+```
+
+</CodeGroup>
+
+<Tip>
+For a full-featured data format (JSON, YAML, MessagePack), use the appropriate third-party crate. The `de::value` module is intentionally minimal: it is designed for tests, adapters, and `FromStr` glue code, not for general-purpose serialization.
+</Tip>

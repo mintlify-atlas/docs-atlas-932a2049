@@ -1,0 +1,172 @@
+---
+title: "Using Serde in no_std and Embedded Environments"
+sidebarTitle: "no_std"
+description: "Learn how to use Serde without the standard library in embedded systems and bare-metal Rust projects using feature flags."
+---
+
+Serde is designed from the ground up to work in `no_std` environments. By disabling the default `std` feature and optionally enabling `alloc`, you can use Serde on bare-metal microcontrollers, in kernel code, or anywhere the Rust standard library is unavailable. The core serialization and deserialization traits, along with implementations for all primitive types, are available with zero dependencies on `std`.
+
+## The Three Tiers of no_std Support
+
+Serde organizes its type support into three distinct tiers based on which allocator and library features are available on your target.
+
+<Steps>
+  <Step title="Core only (no heap allocation)">
+    Disable default features entirely. Only primitive types and types from `core` are supported — no `String`, no `Vec`, no heap allocation of any kind.
+
+    ```toml Cargo.toml
+    [dependencies]
+    serde = { version = "1", default-features = false }
+    ```
+
+    **Available types in this tier:**
+    - Primitive types: `bool`, `i8`–`i128`, `u8`–`u128`, `isize`, `usize`, `f32`, `f64`, `char`
+    - Fixed-size arrays: `[T; 0]` through `[T; 32]`
+    - Tuples up to size 16
+    - `Option<T>`, `PhantomData<T>`
+    - `Cell<T>`, `RefCell<T>`
+    - `Bound<T>`, `Range<T>`, `RangeFrom<T>`, `RangeInclusive<T>`, `RangeTo<T>`
+    - `core::num::Wrapping<T>`, `core::num::NonZero*`
+    - `core::time::Duration`
+    - Zero-copy borrowed types: `&str`, `&[u8]`
+    - `&str` and `&[u8]` (zero-copy, no allocation needed)
+  </Step>
+
+  <Step title="With alloc (heap, no std)">
+    Enable the `alloc` feature to gain support for owned heap-allocated types from the `alloc` crate. This is the most common choice for embedded targets with a global allocator.
+
+    ```toml Cargo.toml
+    [dependencies]
+    serde = { version = "1", default-features = false, features = ["alloc"] }
+    ```
+
+    **Additional types unlocked by `alloc`:**
+    - `String`, `Box<T>`, `Box<[T]>`, `Box<str>`
+    - `Vec<T>`, `VecDeque<T>`, `LinkedList<T>`
+    - `BTreeMap<K, V>`, `BTreeSet<T>`, `BinaryHeap<T>`
+    - `Cow<'a, T>`
+    - `CString` (via `alloc::ffi`)
+
+    Note that `HashMap` and `HashSet` are **not** available in the `alloc` tier — they live in `std`. Use `BTreeMap` and `BTreeSet` as drop-in replacements.
+  </Step>
+
+  <Step title="With std (default)">
+    The default configuration. Enables all standard library types, including the full I/O stack, OS types, hash maps, and atomics.
+
+    ```toml Cargo.toml
+    [dependencies]
+    serde = { version = "1" }
+    # equivalent to:
+    serde = { version = "1", features = ["std"] }
+    ```
+
+    **Additional types unlocked by `std`:**
+    - `HashMap<K, V, H>`, `HashSet<T, H>`
+    - `OsStr`, `OsString`, `Path`, `PathBuf`
+    - `CStr`, `CString`
+    - `Mutex<T>`, `RwLock<T>`
+    - `SystemTime`
+    - Atomic types (`AtomicBool`, `AtomicU32`, etc.)
+    - Network types: `IpAddr`, `Ipv4Addr`, `Ipv6Addr`, `SocketAddr`, etc.
+  </Step>
+</Steps>
+
+## Using serde_derive in no_std
+
+The `#[derive(Serialize, Deserialize)]` macros work perfectly in `no_std` environments. The derive macros are a separate crate (`serde_derive`) that runs at compile time on your development machine — it has no runtime dependency on `std`.
+
+<Note>
+  Add `serde_derive` explicitly alongside `serde` when you are not using the
+  bundled `derive` feature, as shown in the no_std test suite:
+
+  ```toml Cargo.toml
+  [dependencies]
+  serde = { version = "1", default-features = false }
+  serde_derive = { version = "1" }
+  ```
+
+  Alternatively, use the built-in `derive` feature flag (the derive proc-macro
+  itself always runs on the host and never requires `std` on the target):
+
+  ```toml Cargo.toml
+  [dependencies]
+  serde = { version = "1", default-features = false, features = ["derive"] }
+  ```
+</Note>
+
+## Practical Example: Embedded Struct
+
+Here is a complete example of defining serializable types in a `no_std` binary, exactly as exercised in Serde's own test suite:
+
+```rust src/main.rs
+#![no_std]
+#![no_main]
+
+use serde_derive::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct SensorReading {
+    pub sensor_id: u8,
+    pub temperature: i16, // fixed-point, tenths of a degree
+    pub humidity: u8,     // percentage 0–100
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum Command {
+    Reset,
+    SetInterval(u16),   // milliseconds
+    Calibrate { offset: i8 },
+}
+
+// With a no_std-compatible format crate such as postcard:
+//
+//   let reading = SensorReading { sensor_id: 1, temperature: 215, humidity: 60 };
+//   let bytes: Vec<u8> = postcard::to_allocvec(&reading).unwrap();
+//   let back: SensorReading = postcard::from_bytes(&bytes).unwrap();
+```
+
+## Choosing a Format Crate
+
+Not every Serde format crate supports `no_std`. When choosing a serialization format for embedded use, look for crates that explicitly advertise `no_std` compatibility.
+
+<CardGroup cols={2}>
+  <Card title="postcard" icon="microchip" href="https://docs.rs/postcard">
+    A compact binary format designed specifically for embedded and constrained
+    environments. Fully `no_std` compatible, supports zero-copy deserialization,
+    and is widely used in the embedded Rust ecosystem.
+  </Card>
+  <Card title="serde_json (with alloc)" icon="brackets-curly" href="https://docs.rs/serde_json">
+    Supports `no_std` + `alloc` via `default-features = false, features =
+    ["alloc"]`. Not suitable for environments without a heap allocator.
+  </Card>
+</CardGroup>
+
+## Full no_std + alloc + derive Example
+
+```toml Cargo.toml
+[package]
+name = "my-embedded-crate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+```
+
+```rust src/lib.rs
+#![no_std]
+
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub name: String,
+    pub firmware: [u8; 4],
+    pub capabilities: Vec<u8>,
+}
+```
