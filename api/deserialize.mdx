@@ -1,7 +1,7 @@
 ---
-title: "Deserialize Trait — Serde API Reference"
+title: "Deserialize<'de> Trait — Serde Serialization API Reference"
 sidebarTitle: "Deserialize"
-description: "The Deserialize trait marks Rust types that can be constructed from any data format supported by Serde, with lifetime-aware support for zero-copy borrowed data."
+description: "The Deserialize trait marks Rust types constructible from any Serde-supported format, with lifetime-aware zero-copy deserialization via the 'de parameter."
 ---
 
 The `Deserialize` trait is the entry point for the deserialization half of Serde's data model. Any type that implements `Deserialize<'de>` can be constructed from any data format that has a corresponding `Deserializer` implementation — JSON, YAML, Postcard, TOML, and many others — without knowing anything about the source format. The `'de` lifetime parameter is what makes zero-copy deserialization possible: it ties the lifetime of data that `Self` may borrow directly to the lifetime of the input bytes, avoiding allocation for string slices and byte slices when the input lives long enough.
@@ -14,13 +14,19 @@ pub trait Deserialize<'de>: Sized {
     where
         D: Deserializer<'de>;
 
-    fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+    // Provided with a default implementation; rarely overridden.
+    #[doc(hidden)]
+    fn deserialize_in_place<D>(deserializer: D, place: &mut Self) -> Result<(), D::Error>
     where
-        D: Deserializer<'de>;
+        D: Deserializer<'de>,
+    {
+        *place = Self::deserialize(deserializer)?;
+        Ok(())
+    }
 }
 ```
 
-`deserialize` is the primary method: it takes a `Deserializer` and returns `Result<Self, D::Error>`. The `deserialize_in_place` method is a performance optimization that deserializes a value into an existing allocation rather than constructing a fresh one; its default implementation simply delegates to `deserialize`. You should not need to override `deserialize_in_place` in typical implementations.
+`deserialize` is the primary method: it takes a `Deserializer` and returns `Result<Self, D::Error>`. The `deserialize_in_place` method is a performance optimization that deserializes a value into an existing allocation (`place`) rather than constructing a fresh one; its default implementation simply delegates to `deserialize` and writes the result in place. It is marked `#[doc(hidden)]` in the source because it is almost never relevant to users — you should not need to override it in typical implementations. Note the parameter order: `deserializer` comes before `place`.
 
 ## The `'de` lifetime
 

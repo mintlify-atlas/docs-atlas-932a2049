@@ -38,6 +38,22 @@ On `std` and `alloc` builds the error message is heap-allocated as a `Box<str>`.
 
 ---
 
+## NeverDeserializer (unstable)
+
+`NeverDeserializer<E>` is a deserializer that wraps the never type `!` and therefore can never actually be instantiated. It implements `IntoDeserializer<'de, E> for !` and is gated behind the `unstable` Cargo feature.
+
+```rust
+// Only available with feature = "unstable"
+pub struct NeverDeserializer<E> {
+    never: !,
+    // ...
+}
+```
+
+This is useful as a type-level proof that a code path is unreachable when working with exhaustive patterns over `!`.
+
+---
+
 ## Primitive Deserializer Types
 
 Each primitive type `T` is paired with a `TDeserializer<E>` struct that wraps a single value and, when asked to deserialize, calls the corresponding `Visitor::visit_*` method.
@@ -234,6 +250,8 @@ The following table summarises every `IntoDeserializer` implementation backed by
 | `HashSet<T, S>` | `SeqDeserializer<hash_set::IntoIter<T>, E>` *(std)* |
 | `BTreeMap<K, V>` | `MapDeserializer<'de, btree_map::IntoIter<K, V>, E>` *(alloc)* |
 | `HashMap<K, V, S>` | `MapDeserializer<'de, hash_map::IntoIter<K, V>, E>` *(std)* |
+
+`BorrowedStrDeserializer<'de, E>` and `BorrowedBytesDeserializer<'de, E>` are public types that can be constructed directly via `::new(value)`. They implement `IntoDeserializer` for themselves (identity conversion) but no external Rust type maps to them through `IntoDeserializer`. Use them when you hold a `&'de str` or `&'de [u8]` with lifetime tied to the input and need zero-copy deserialization.
 
 ---
 

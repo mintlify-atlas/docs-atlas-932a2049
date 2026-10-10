@@ -1,5 +1,5 @@
 ---
-title: "Implement Deserialize for Custom Rust Types"
+title: "Implement the Deserialize Trait for Custom Rust Types"
 sidebarTitle: "Impl Deserialize"
 description: "Learn how to manually implement Serde's Deserialize trait using the Visitor pattern, covering newtypes, structs via MapAccess, and enums via EnumAccess."
 ---
@@ -34,13 +34,29 @@ pub trait Visitor<'de>: Sized {
 
     // Override the methods for every input type you accept:
     fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> { ... }
+    fn visit_i8<E: de::Error>(self, v: i8) -> Result<Self::Value, E> { ... }
+    fn visit_i16<E: de::Error>(self, v: i16) -> Result<Self::Value, E> { ... }
+    fn visit_i32<E: de::Error>(self, v: i32) -> Result<Self::Value, E> { ... }
     fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { ... }
+    fn visit_i128<E: de::Error>(self, v: i128) -> Result<Self::Value, E> { ... }
+    fn visit_u8<E: de::Error>(self, v: u8) -> Result<Self::Value, E> { ... }
+    fn visit_u16<E: de::Error>(self, v: u16) -> Result<Self::Value, E> { ... }
+    fn visit_u32<E: de::Error>(self, v: u32) -> Result<Self::Value, E> { ... }
     fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { ... }
+    fn visit_u128<E: de::Error>(self, v: u128) -> Result<Self::Value, E> { ... }
+    fn visit_f32<E: de::Error>(self, v: f32) -> Result<Self::Value, E> { ... }
     fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { ... }
+    fn visit_char<E: de::Error>(self, v: char) -> Result<Self::Value, E> { ... }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> { ... }
     fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Self::Value, E> { ... }
     fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> { ... }
     fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> { ... }
+    fn visit_borrowed_bytes<E: de::Error>(self, v: &'de [u8]) -> Result<Self::Value, E> { ... }
+    fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> { ... }
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { ... }
+    fn visit_some<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> { ... }
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { ... }
+    fn visit_newtype_struct<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> { ... }
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> { ... }
     fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> { ... }
     fn visit_enum<A: EnumAccess<'de>>(self, data: A) -> Result<Self::Value, A::Error> { ... }

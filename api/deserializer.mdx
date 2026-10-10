@@ -1,7 +1,7 @@
 ---
-title: "Deserializer Trait — Serde API Reference"
+title: "Deserializer Trait — Serde Deserialization API Reference"
 sidebarTitle: "Deserializer"
-description: "The Deserializer trait is implemented by data format crates such as serde_json and postcard to parse input and drive Visitor implementations for each Serde data model type."
+description: "The Deserializer trait is implemented by format crates like serde_json and postcard to parse input and drive Visitor callbacks for each data model type."
 ---
 
 The `Deserializer` trait is the input half of Serde's data model. Where `Deserialize` is implemented by **data structures** that know how to construct themselves from a sequence of `Visitor` callbacks, `Deserializer` is implemented by **data formats** that know how to parse their wire representation and call the right `Visitor` methods. Most application code never implements `Deserializer` directly — that work is done by format crates like `serde_json`, `serde_yaml`, and `postcard`. You interact with this trait indirectly whenever you call a format's top-level `from_str`, `from_slice`, or `from_reader` function, which constructs a concrete `Deserializer` and passes it to your type's `Deserialize::deserialize` method.

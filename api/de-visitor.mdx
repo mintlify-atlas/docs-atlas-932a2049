@@ -85,7 +85,7 @@ Fills in the blank in "This Visitor expects to receive ___". Serde uses this in 
 
 Every `visit_*` method has a default implementation. Understanding the defaults tells you exactly which methods you need to override.
 
-<Accordion title="Primitives: visit_bool, visit_i*/visit_u*, visit_f*">
+<Accordion title="Primitives: visit_bool, visit_i*/visit_u*, visit_f*, visit_char">
 
 `visit_bool`, `visit_i64`, `visit_u64`, `visit_f64`, `visit_i128`, and `visit_u128` each return an `invalid_type` error by default.
 
@@ -96,6 +96,8 @@ The smaller integer variants forward to the 64-bit base:
 - `visit_f32` → forwards to `visit_f64`
 
 So if you only override `visit_i64` and `visit_u64`, your visitor will accept any integer size.
+
+`visit_char` defaults to encoding the `char` as a one-character UTF-8 string and forwarding to `visit_str`. Override it only when you need distinct handling for a `char` versus a string slice.
 
 </Accordion>
 

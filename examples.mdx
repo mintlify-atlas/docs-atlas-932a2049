@@ -4,7 +4,7 @@ sidebarTitle: "Examples"
 description: "Practical Rust examples showing how to use Serde to serialize and deserialize structs, enums, nested types, optional fields, and custom formats."
 ---
 
-The best way to learn Serde is by reading working code. The examples on this page cover the most common patterns you'll encounter: plain structs, enums in different representations, field renaming, struct flattening, conditional skipping, and plugging in custom serialization logic. Every snippet compiles against the current Serde 1.x API and can be dropped into a project that has `serde = { version = "1", features = ["derive"] }` and `serde_json = "1"` in its dependencies.
+The best way to learn Serde is by reading working code. The examples on this page cover the most common patterns you'll encounter: plain structs, enums in different representations, field renaming, struct flattening, conditional skipping, and plugging in custom serialization logic. Most snippets require only `serde = { version = "1", features = ["derive"] }` and `serde_json = "1"` in your `Cargo.toml`; the custom-serializer example in the last tab additionally requires `chrono = "0.4"`.
 
 <Tabs>
   <Tab title="Structs">
@@ -532,7 +532,7 @@ Use `#[serde(with = "module")]` to plug in a module that handles a type Serde do
 use serde::{Deserialize, Serialize};
 
 mod date_format {
-    use serde::{Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     const FORMAT: &str = "%Y-%m-%d";
 

@@ -1,5 +1,5 @@
 ---
-title: "Serde Feature Flags: derive, alloc, rc, and More"
+title: "Serde Feature Flags Reference: std, derive, alloc, rc"
 sidebarTitle: "Feature Flags"
 description: "A complete reference for every Serde feature flag — std, derive, alloc, rc, unstable — with examples and guidance on when to use each."
 ---
@@ -64,11 +64,11 @@ Serde exposes a small, carefully designed set of Cargo feature flags that contro
 
     <Warning>
       Serializing and deserializing `Rc<T>` or `Arc<T>` **does not preserve
-      pointer identity**. Each deserialized value will be an independent
-      allocation — shared references are not reconstructed. If two fields in
-      your data structure point to the same `Rc<T>`, you will end up with two
-      separate copies after a round-trip. Enable this feature only if you are
-      certain that is acceptable for your use case.
+      identity and may result in multiple copies of the same data**. If two
+      fields in your data structure point to the same `Rc<T>`, you will end up
+      with independent allocations after a round-trip — shared references are
+      not reconstructed. Enable this feature only if you are certain that is
+      acceptable for your use case.
     </Warning>
   </Accordion>
 

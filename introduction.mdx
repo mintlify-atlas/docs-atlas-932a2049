@@ -1,7 +1,7 @@
 ---
-title: "Serde: A Serialization Framework for Rust"
+title: "Introduction to Serde: Rust Serialization Framework"
 sidebarTitle: "Introduction"
-description: "Serde is a framework for serializing and deserializing Rust data structures efficiently and generically, with zero runtime overhead."
+description: "Serde is a Rust framework for serializing and deserializing data structures using a trait-based approach that compiles to zero runtime overhead."
 ---
 
 Serde is a framework for **ser**ializing and **de**serializing Rust data structures efficiently and generically. It sits at the center of a two-sided ecosystem: on one side are data structures that know how to describe themselves, and on the other are data formats that know how to encode and decode data. Serde defines the boundary between these two groups, meaning that any data structure supported by Serde can be serialized or deserialized using any supported data format — without either side knowing anything specific about the other.

@@ -1,5 +1,5 @@
 ---
-title: "Derive Serialize and Deserialize Automatically"
+title: "Serde Derive: Generate Serialize and Deserialize Impls"
 sidebarTitle: "Derive Macros"
 description: "Use Serde's derive macros to automatically generate Serialize and Deserialize implementations for your Rust structs and enums at compile time."
 ---
@@ -15,7 +15,7 @@ The derive macros live in the `serde_derive` crate, which is re-exported through
 serde = { version = "1", features = ["derive"] }
 ```
 
-If you only need to write handwritten `Serialize` or `Deserialize` implementations without the macros, you can omit the `derive` feature and depend on `serde` alone (or on `serde_core` in `no_std` environments):
+If you only need to write handwritten `Serialize` or `Deserialize` implementations without the macros, you can omit the `derive` feature and depend on `serde` alone:
 
 ```toml Cargo.toml
 # Handwritten impls only — no proc-macro dependency

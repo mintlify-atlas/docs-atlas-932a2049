@@ -260,7 +260,7 @@ Container attributes are placed on the struct or enum itself: `#[serde(...)]` di
   </Accordion>
 
   <Accordion title="deny_unknown_fields">
-    **`deny_unknown_fields`** — Valid on structs. Causes deserialization to fail if any unknown fields are present. Has no direct effect on the `Serialize` impl but is present on the container and read during both derive passes when both traits are derived together.
+    **`deny_unknown_fields`** — Valid on structs and enums. Causes deserialization to fail if the input contains any key not matching a known field or variant. Has no effect on the `Serialize` impl itself, but the attribute is parsed by both derive passes when `Serialize` and `Deserialize` are derived together on the same type.
   </Accordion>
 
   <Accordion title="crate">
@@ -404,7 +404,9 @@ Variant attributes are placed on individual variants of an enum.
     ```
   </Accordion>
 
-  <Accordion title="skip_serializing">
+  <Accordion title="skip / skip_serializing">
+    **`skip`** — Omit this variant from both serialization and deserialization. Attempting to serialize a skipped variant produces a runtime error; the variant is also invisible to deserialization.
+
     **`skip_serializing`** — Attempting to serialize a value of this variant will produce a serialization error at runtime. Useful for variants that are only constructed internally and must never appear in output.
 
     ```rust
@@ -412,8 +414,25 @@ Variant attributes are placed on individual variants of an enum.
     enum Status {
         Active,
         #[serde(skip_serializing)]
+        SerializeError,
+        #[serde(skip)]
         InternalOnly,
     }
+    ```
+  </Accordion>
+
+  <Accordion title="rename_all (variant-level)">
+    **`rename_all = \"rule\"`** — Apply a naming convention to the fields *inside this specific variant*. Overrides any container-level `rename_all_fields` for this variant. Accepts the same eight values as the container-level `rename_all`.
+
+    ```rust
+    #[derive(Serialize)]
+    enum Message {
+        #[serde(rename_all = \"camelCase\")]
+        Request { request_id: u64, payload: String },
+        Response { status_code: u16 },
+    }
+    // Request fields → \"requestId\", \"payload\"
+    // Response fields → \"status_code\" (default)
     ```
   </Accordion>
 

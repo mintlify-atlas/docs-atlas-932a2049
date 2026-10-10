@@ -1,7 +1,7 @@
 ---
-title: "Serializer Trait — Serde API Reference"
+title: "Serializer Trait — Serde Serialization API Reference"
 sidebarTitle: "Serializer"
-description: "The Serializer trait is implemented by data format crates such as serde_json and postcard to define how every type in Serde's data model is encoded."
+description: "The Serializer trait is implemented by format crates like serde_json and postcard to encode every type in Serde's 29-type data model into a target format."
 ---
 
 The `Serializer` trait is the output half of Serde's data model. Where `Serialize` is implemented by **data structures** that know how to describe themselves, `Serializer` is implemented by **data formats** that know how to encode each of the 29 types in Serde's data model. Most application code never implements `Serializer` directly — that work is done by format crates like `serde_json`, `serde_yaml`, and `postcard`. You will interact with this trait indirectly whenever you call a format's top-level `to_string`, `to_vec`, or `to_writer` function, which constructs a concrete `Serializer` and hands it to your type's `Serialize::serialize` method.

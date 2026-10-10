@@ -313,7 +313,7 @@ Container attributes are placed on the struct or enum itself.
   </Accordion>
 
   <Accordion title="deny_unknown_fields">
-    **`deny_unknown_fields`** — Return an error if the input contains any key that does not correspond to a known field. By default Serde silently ignores unknown fields.
+    **`deny_unknown_fields`** — Valid on structs and enums. Return an error if the input contains any key or variant tag that does not correspond to a known field or variant. By default Serde silently ignores unknown fields.
 
     ```rust
     #[derive(Deserialize)]
@@ -521,8 +521,36 @@ Variant attributes are placed on individual variants of an enum.
     ```
   </Accordion>
 
-  <Accordion title="skip_deserializing">
+  <Accordion title="skip / skip_deserializing">
+    **`skip`** — Exclude this variant from both serialization and deserialization. Attempting to serialize a skipped variant produces a runtime error; the variant is also invisible to deserialization.
+
     **`skip_deserializing`** — Ignore this variant entirely during deserialization. The variant can never be produced by the `Deserialize` impl; values that would match it will be treated as unknown variants (an error unless `#[serde(other)]` is present elsewhere).
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Status {
+        Active,
+        #[serde(skip_deserializing)]
+        DeserializeIgnored,
+        #[serde(skip)]
+        InternalOnly,
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="rename_all (variant-level)">
+    **`rename_all = \"rule\"`** — Apply a naming convention to the fields *inside this specific variant*. Overrides any container-level `rename_all_fields` for this variant. Accepts the same eight values as the container-level `rename_all`.
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Message {
+        #[serde(rename_all = \"camelCase\")]
+        Request { request_id: u64, payload: String },
+        Response { status_code: u16 },
+    }
+    // \"Request\" expects keys \"requestId\" and \"payload\"
+    // \"Response\" expects key \"status_code\" (default)
+    ```
   </Accordion>
 
   <Accordion title="other">
@@ -557,6 +585,21 @@ Variant attributes are placed on individual variants of an enum.
         Move { x: i32, y: i32 },
         #[serde(untagged)]
         Raw(String),  // matches any string not consumed by a tagged variant
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="borrow (variant-level)">
+    **`borrow`** — On a newtype variant (a variant with exactly one unnamed field), instruct the `Deserialize` derive to borrow data from the deserializer's input lifetime `'de` for that field. Only valid on single-field tuple variants.
+
+    **`borrow = "'a + 'b"`** — Borrow only the specified lifetimes rather than all available lifetimes.
+
+    ```rust
+    #[derive(Deserialize)]
+    enum Token<'a> {
+        #[serde(borrow)]
+        Str(&'a str),
+        Int(i64),
     }
     ```
   </Accordion>

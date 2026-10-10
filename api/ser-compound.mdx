@@ -1,7 +1,7 @@
 ---
-title: "Serializer Compound Traits: SerializeSeq, SerializeMap, and More"
+title: "Serde Compound Traits: SerializeSeq to SerializeMap"
 sidebarTitle: "Compound Traits"
-description: "Reference for all seven Serde compound serializer traits — SerializeSeq, SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, SerializeMap, SerializeStruct, and SerializeStructVariant."
+description: "Documents all seven Serde compound serializer traits — SerializeSeq through SerializeStructVariant — with method signatures and examples."
 ---
 
 When a `Serializer` encounters a compound type — a sequence, map, tuple, struct, or enum variant — it cannot serialize the entire value in a single method call. Instead, the corresponding `Serializer` method (such as `serialize_seq` or `serialize_struct`) returns a stateful object that the caller drives incrementally: serialize each element or field one at a time, then call `end()` to finalize the output and recover the `Ok` value. Serde defines seven traits that describe these stateful serializer objects, one for each compound kind in the data model.

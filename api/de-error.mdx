@@ -1,5 +1,5 @@
 ---
-title: "de::Error Trait — Serde Deserialization Errors"
+title: "de::Error Trait — Serde Deserialization Error Types"
 sidebarTitle: "de::Error"
 description: "The de::Error trait lets Deserialize implementations produce format-agnostic errors via custom, invalid_type, invalid_value, missing_field, and more."
 ---
@@ -81,27 +81,28 @@ fn invalid_length(len: usize, exp: &dyn Expected) -> Self {
 Raised when a `Deserialize` enum type receives a variant name it does not recognise. Pass an empty `expected` slice when the enum has no variants at all.
 
 Default implementation produces messages like:
-- `unknown variant 'foo', expected 'Bar' or 'Baz'`
-- `unknown variant 'foo', there are no variants`
+- `` unknown variant `foo`, expected `Bar` or `Baz` ``
+- `` unknown variant `foo`, there are no variants ``
 </Accordion>
 
 <Accordion title="fn unknown_field(field: &str, expected: &'static [&'static str]) -> Self">
-Raised when a `Deserialize` struct type receives a field name it does not recognise. Typically used inside `visit_map` when processing struct fields.
+Raised when a `Deserialize` struct type receives a field name it does not recognise. Typically used inside `visit_map` when processing struct fields. Pass an empty `expected` slice when the struct has no fields at all.
 
 Default implementation produces messages like:
-- `unknown field 'xyz', expected one of 'a', 'b', 'c'`
+- `` unknown field `xyz`, expected `a` or `b` ``
+- `` unknown field `xyz`, there are no fields ``
 </Accordion>
 
 <Accordion title="fn missing_field(field: &'static str) -> Self">
 Raised when a required struct field was absent from the input.
 
-Default implementation: `missing field 'field_name'`
+Default implementation: `` missing field `field_name` ``
 </Accordion>
 
 <Accordion title="fn duplicate_field(field: &'static str) -> Self">
 Raised when the same struct field appeared more than once in the input.
 
-Default implementation: `duplicate field 'field_name'`
+Default implementation: `` duplicate field `field_name` ``
 </Accordion>
 
 ---
@@ -170,7 +171,7 @@ pub enum Unexpected<'a> {
 }
 ```
 
-`Unexpected` implements `Display`, so error messages are formatted automatically — for example, `Unexpected::Bool(true)` displays as `boolean 'true'` and `Unexpected::Seq` displays as `sequence`.
+`Unexpected` implements `Display`, so error messages are formatted automatically — for example, `Unexpected::Bool(true)` displays as `` boolean `true` `` and `Unexpected::Seq` displays as `sequence`.
 
 ### Example: using `Unexpected` in a Visitor
 

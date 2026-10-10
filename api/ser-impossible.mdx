@@ -1,7 +1,7 @@
 ---
-title: "Impossible: Uninstantiable Serializer Helper Type"
+title: "Impossible: Serde's Uninstantiable Serializer Type"
 sidebarTitle: "Impossible"
-description: "Impossible<Ok, Error> is a helper type for Serializer implementations that do not support certain compound types, satisfying trait bounds without being constructible."
+description: "Impossible<Ok, Error> satisfies all seven compound serializer trait bounds without being constructible, letting serializers reject unsupported types."
 ---
 
 Not every data format needs to support every compound type in the Serde data model. A serializer that only handles scalar values — for example one backed by `fmt::Formatter` — has no meaningful implementation for `serialize_seq` or `serialize_map`. Serde provides `Impossible<Ok, Error>` precisely for this situation: it is a type that satisfies all seven compound serializer trait bounds but can never actually be constructed, making it safe to use as the associated type for compound operations your serializer does not support.

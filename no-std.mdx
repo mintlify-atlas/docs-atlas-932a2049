@@ -1,7 +1,7 @@
 ---
-title: "Using Serde in no_std and Embedded Environments"
+title: "Using Serde Without std: no_std and Embedded Guide"
 sidebarTitle: "no_std"
-description: "Learn how to use Serde without the standard library in embedded systems and bare-metal Rust projects using feature flags."
+description: "Use Serde without the Rust standard library in embedded and bare-metal projects by choosing between the core-only, alloc, and std feature tiers."
 ---
 
 Serde is designed from the ground up to work in `no_std` environments. By disabling the default `std` feature and optionally enabling `alloc`, you can use Serde on bare-metal microcontrollers, in kernel code, or anywhere the Rust standard library is unavailable. The core serialization and deserialization traits, along with implementations for all primitive types, are available with zero dependencies on `std`.
@@ -29,7 +29,6 @@ Serde organizes its type support into three distinct tiers based on which alloca
     - `core::num::Wrapping<T>`, `core::num::NonZero*`
     - `core::time::Duration`
     - Zero-copy borrowed types: `&str`, `&[u8]`
-    - `&str` and `&[u8]` (zero-copy, no allocation needed)
   </Step>
 
   <Step title="With alloc (heap, no std)">

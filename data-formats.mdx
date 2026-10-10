@@ -1,5 +1,5 @@
 ---
-title: "Serde Data Formats: JSON, YAML, TOML, and More"
+title: "Serde Data Formats: JSON, YAML, TOML, Binary, and More"
 sidebarTitle: "Data Formats"
 description: "A complete guide to every data format crate in the Serde ecosystem, from JSON and YAML to embedded binary formats and environment variables."
 ---
@@ -43,6 +43,7 @@ The following table lists every data format that has been implemented for Serde 
 | **URL query strings** | URL encoding in the x-www-form-urlencoded format | [docs.rs/serde_qs](https://docs.rs/serde_qs) | |
 | **Starlark** | Format used for build targets by the Bazel and Buck build systems | [dtolnay/serde-starlark](https://github.com/dtolnay/serde-starlark) | Serialization only |
 | **Envy** | Deserialize environment variables into Rust structs | [softprops/envy](https://github.com/softprops/envy) | Deserialization only |
+| **Envy Store** | Deserialize AWS Parameter Store parameters into Rust structs | [softprops/envy-store](https://github.com/softprops/envy-store) | Deserialization only |
 | **S-expressions** | Textual representation of code and data used by the Lisp language family | [rotty/lexpr-rs](https://github.com/rotty/lexpr-rs) | |
 | **D-Bus** | D-Bus binary wire format | [docs.rs/zvariant](https://docs.rs/zvariant) | |
 | **FlexBuffers** | Schemaless cousin of Google's FlatBuffers zero-copy serialization format | [google/flatbuffers](https://github.com/google/flatbuffers/tree/master/rust/flexbuffers) | |

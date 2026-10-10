@@ -1,7 +1,7 @@
 ---
-title: "In-Place Deserialization and DeserializeSeed"
+title: "In-Place Deserialization and DeserializeSeed in Serde"
 sidebarTitle: "In-Place Deserialization"
-description: "Advanced Serde techniques: stateful deserialization with DeserializeSeed, in-place mutation of existing values, and zero-copy borrowing with the 'de lifetime."
+description: "Advanced Serde techniques: stateful deserialization with DeserializeSeed, in-place reuse of existing values, and zero-copy borrowing with the de lifetime."
 ---
 
 For most use cases the standard `Deserialize` trait is all you need: call a format's `from_str` or `from_bytes` function and get back a freshly allocated value. But in performance-sensitive code — parsers that process thousands of messages per second, game servers deserializing state on every tick, or embedded systems with tight memory budgets — three advanced techniques give you meaningful wins: `DeserializeSeed` for carrying external context into a deserializer, in-place deserialization for reusing existing allocations, and the `'de` lifetime for borrowing directly from the input buffer without any copying.
@@ -110,7 +110,7 @@ In-place deserialization mutates an *existing* value rather than constructing a 
 The `Deserialize` trait has a second, lesser-known method alongside `deserialize`:
 
 ```rust
-fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+fn deserialize_in_place<D>(deserializer: D, place: &mut Self) -> Result<(), D::Error>
 where
     D: Deserializer<'de>,
 ```
@@ -123,7 +123,7 @@ The trait provides a default implementation that simply calls `deserialize` and 
 
 ```rust
 // Default provided by Serde — always correct, not always optimal.
-fn deserialize_in_place<D>(place: &mut Self, deserializer: D) -> Result<(), D::Error>
+fn deserialize_in_place<D>(deserializer: D, place: &mut Self) -> Result<(), D::Error>
 where
     D: Deserializer<'de>,
 {

@@ -428,9 +428,9 @@ struct User {
 // Error: "invalid type: integer `5`, expected a user object with `id` and `name` fields"
 ```
 
-### `#[serde(non_exhaustive)]`
+### `#[non_exhaustive]`
 
-When applied to an enum, this attribute (via the standard `#[non_exhaustive]`) allows future variants to be added without breaking deserialization. Serde will silently skip unknown variants during deserialization instead of returning an error.
+When the standard Rust `#[non_exhaustive]` attribute is applied to an enum, Serde detects it and adjusts deserialization behavior: unknown variants are silently ignored instead of producing an error. This is not a `#[serde(...)]` attribute — it is the built-in Rust attribute that Serde recognizes automatically.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -440,6 +440,43 @@ use serde::{Deserialize, Serialize};
 enum Status {
     Active,
     Inactive,
+}
+// Deserializing an unknown variant like "Pending" will not return an error
+```
+
+</Accordion>
+
+<Accordion title="field_identifier and variant_identifier">
+
+### `#[serde(field_identifier)]`
+
+Marks an enum as a *field identifier* type used inside custom `Deserialize` implementations. All variants must be unit variants, except that one variant may be annotated with `#[serde(other)]` as a newtype variant to catch unknown field names. This attribute is intended for advanced use cases when writing manual `Visitor` implementations.
+
+```rust
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "lowercase")]
+enum Field {
+    Name,
+    Age,
+    #[serde(other)]
+    Unknown,
+}
+```
+
+### `#[serde(variant_identifier)]`
+
+Like `field_identifier`, but marks the enum as a *variant identifier* type. All variants must be unit variants. Used in advanced custom `Deserialize` implementations to match enum variant names from the input.
+
+```rust
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(variant_identifier, rename_all = "lowercase")]
+enum Variant {
+    Circle,
+    Square,
 }
 ```
 
@@ -534,17 +571,20 @@ Shorthand that sets both `serialize_with = "module::serialize"` and `deserialize
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
-fn serialize_as_zero<S: Serializer>(_: S) -> Result<S::Ok, S::Error> {
-    todo!()
+// For a unit variant: no field references precede the serializer argument.
+fn serialize_unit_as_zero<S: Serializer>(serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i32(0)
 }
-fn deserialize_from_zero<'de, D: Deserializer<'de>>(_: D) -> Result<(), D::Error> {
-    todo!()
+
+fn deserialize_unit_from_zero<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    let _n: i32 = serde::Deserialize::deserialize(deserializer)?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
 enum Token {
-    #[serde(serialize_with = "serialize_as_zero")]
-    #[serde(deserialize_with = "deserialize_from_zero")]
+    #[serde(serialize_with = "serialize_unit_as_zero")]
+    #[serde(deserialize_with = "deserialize_unit_from_zero")]
     Unit,
     Text(String),
 }

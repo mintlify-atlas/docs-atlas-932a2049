@@ -1,7 +1,7 @@
 ---
-title: "Serialize Trait — Serde API Reference"
+title: "Serialize Trait — Serde Serialization API Reference"
 sidebarTitle: "Serialize"
-description: "The Serialize trait marks Rust types that can be converted into any data format supported by Serde, from JSON and YAML to compact binary encodings."
+description: "The Serialize trait marks Rust types that can be converted into any Serde-supported format, from JSON and YAML to compact binary encodings like Postcard."
 ---
 
 The `Serialize` trait is the entry point for the serialization half of Serde's data model. Any type that implements `Serialize` can be converted into any data format that has a corresponding `Serializer` implementation — JSON, YAML, Postcard, TOML, and many others — without knowing anything about the target format. Serde ships with implementations for a wide range of standard library types, and the `#[derive(Serialize)]` macro generates correct implementations for most user-defined structs and enums automatically.
